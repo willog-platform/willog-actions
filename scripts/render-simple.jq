@@ -18,21 +18,27 @@ def esc: (. // "") | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
 def state:
   if $phase == "start" then "start"
   elif .deploy_status == "success" then "success"
+  elif .deploy_status == "cancelled" then "cancelled"
   else "failure" end;
 
 def color:
   if state == "start" then "#1e90ff"
   elif state == "success" then "#36a64f"
+  elif state == "cancelled" then "#808080"
   else "#dc3545" end;
 
 def headline:
   if state == "start" then "🚀  배포 시작"
   elif state == "success" then "✅  배포 성공"
+  elif state == "cancelled" then "⏹️  배포 취소"
   else "❌  배포 실패" end;
 
 def footer:
   if state == "start" then "*" + (.actor | esc) + "* 님이 배포를 시작했습니다"
   elif state == "success" then "배포가 정상적으로 완료되었습니다 🎉"
+  # cancelled 는 failure 와 다른 상태다 (예: argocd-sync 의 660s 타임아웃으로
+  # 인한 취소). "오류가 발생했습니다" 는 사실과 다르므로 별도 문안을 쓴다.
+  elif state == "cancelled" then "배포가 취소되었습니다 ⏹️ 오류는 아닙니다"
   else "배포 중 오류가 발생했습니다 🔥 로그를 확인하세요" end;
 
 {

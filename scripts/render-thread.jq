@@ -41,5 +41,7 @@ def api_lines:
         + "\n*커밋 범위*  `" + (.range.base | esc) + ".." + (.range.head | esc) + "`  ("
           + (.range.commits|tostring) + " commits"
           + (if .range.truncated then ", 절단됨" else "" end) + ")"
-        + "\n*이미지 태그*  `" + (.image_tag | esc) + "`" )
+        # 빈 image_tag 는 빈 코드스팬이 아니라 `-` 로 (render-main.jq·render-simple.jq 와 동일 규칙).
+        + "\n*이미지 태그*  `" +
+          (if ((.image_tag // "") == "") then "-" else (.image_tag | esc) end) + "`" )
 }

@@ -133,7 +133,9 @@ def mention_prefix:
                   field("🔗  링크"; links_field) ] ) },
             { type: "context", elements: [
                 { type: "image", image_url: ("https://github.com/" + .actor + ".png"), alt_text: .actor },
-                md("*" + (.actor | esc) + "* 님이 배포  ·  `" + (.image_tag | esc) + "`") ] } ]
+                # 빈 image_tag 는 빈 코드스팬(` `` `)이 아니라 `-` 로 (render-simple.jq 와 동일 규칙).
+                md("*" + (.actor | esc) + "* 님이 배포  ·  `" +
+                   (if ((.image_tag // "") == "") then "-" else (.image_tag | esc) end) + "`") ] } ]
       )
     } ]
   }
