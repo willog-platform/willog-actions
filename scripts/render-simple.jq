@@ -53,7 +53,10 @@ def footer:
           md("*🌐  환경*\n`" + (.environment | esc) + "`"),
           md("*🎯  apps*\n`" + (.apps | esc) + "`"),
           md("*📦  이미지*\n`" + (if ((.image_tag // "") == "") then "-" else (.image_tag | esc) end) + "`"),
-          md("*🔀  범위*\n`" + (.range.base | esc) + ".." + (.range.head | esc) + "`") ] },
+          # base == head 면 같은 커밋 재배포다. 해시 두 개를 눈으로 비교하게
+          # 하지 않고 명시한다 — 운영자가 "새로 나간 것이 있나"를 즉시 알아야 한다.
+          md("*🔀  범위*\n`" + (.range.base | esc) + ".." + (.range.head | esc) + "`"
+             + (if .range.base == .range.head then "\n_재배포 — 새 커밋 없음_" else "" end)) ] },
       { type: "context", elements: [
           # `image_url` 과 `alt_text` 는 이스케이프하지 않는다. 둘 다 mrkdwn 이
           # 아니다 — `alt_text` 는 접근성 문자열이라 Slack 이 멘션으로 파싱하지

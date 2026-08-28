@@ -76,7 +76,12 @@ assert_json_eq "경고가 여러 줄로 쪼개지지 않는다" \
 
 # --- Choose channel : 진리표 핵심 셀 ---
 ch() {
+  # RANGE_JSON 은 F1(유령 릴리즈 방지) 가드가 추가되며 `Choose channel` 의
+  # 필수 env 가 됐다. 이 진리표는 phase/status/environment/채널 조합을
+  # 검사하는 것이 목적이므로 commits:1 (비어 있지 않은 범위) 로 고정한다 —
+  # commits:0 케이스는 별도 "유령 릴리즈 방지" 어서션이 전담한다.
   PHASE="$1" STATUS="$2" ENVIRONMENT="$3" DEV_CH=Cdev REL_CH="$4" \
+    RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
     run_step "Choose channel" 2>/dev/null | tr '\n' ' '
 }
 assert_json_eq "prod+result+success → 릴리즈 채널" \
@@ -93,12 +98,14 @@ assert_json_eq "릴리즈 채널 미지정 → 형식은 유지, 채널만 dev" 
   "$(ch result success prod '' | jq -Rc .)" '"release=true id=Cdev "'
 
 e="$(PHASE=result STATUS=success ENVIRONMENT=prod DEV_CH=Cdev REL_CH= \
+     RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
      run_step "Choose channel" 2>&1 >/dev/null)"
 case "$e" in
   *'::warning::'*) _pass "릴리즈 채널 미지정은 ::warning:: 으로 알린다" ;;
   *)               _fail "릴리즈 채널 미지정은 ::warning:: 으로 알린다" ;;
 esac
 e="$(PHASE=result STATUS=success ENVIRONMENT=prod DEV_CH=Cdev REL_CH=Crel \
+     RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
      run_step "Choose channel" 2>&1 >/dev/null)"
 case "$e" in
   *'::warning::'*) _fail "릴리즈 채널이 지정됐는데 경고가 났다 (경고 피로)" ;;
@@ -310,3 +317,147 @@ if send_rc '{"ok":true,"ts":"123.456"}' '{"ok":false,"error":"x"}'; then
 else
   _fail "스레드 실패가 job 을 실패시켰다"
 fi
+
+# --- Move deployed marker tag : 진리표 (자기치유의 핵심) ---
+# 이 태스크가 "가장 중요한 성질"이라 부른 것에 회귀 보호가 없었다.
+# 실제 git repo + bare 리모트를 만들어 태그가 실제로 이동했는지 측정한다.
+# marker_case <RELEASE> <SENT> — 추출된 스텝 본문을 실제 repo 에서 돌리고
+# **bare 리모트에 태그가 실제로 갔는지**를 측정한다(로컬 태그가 아니다).
+# 스텝 레벨 `if:`(always()/outcome/phase/status)는 추출 하네스가 우회하므로
+# 이 함수로는 검증되지 않는다 — 그 게이팅은 리뷰에서 손으로 확인해야 한다.
+marker_case() {
+  local release="$1" sent="$2" sent_simple="${3-}"
+  local up wk moved
+  up="$(mktemp -d)"; wk="$(mktemp -d)"
+  git init -q --bare "$up/o.git"
+  git init -q -b main "$wk"
+  git -C "$wk" config user.email t@t.io; git -C "$wk" config user.name t
+  echo a > "$wk/a"; git -C "$wk" add -A; git -C "$wk" commit -q -m a
+  git -C "$wk" remote add origin "$up/o.git"
+  git -C "$wk" push -q origin main
+  # 스텝 본문을 이 repo 안에서 실행한다 (git 작업이므로 cwd 가 중요하다).
+  local body out
+  body="$(mktemp)"; out="$(mktemp)"
+  extract_step "Move deployed marker tag" > "$body"
+  ( cd "$wk" && ENVIRONMENT=prod RELEASE="$release" SENT="$sent" \
+      SENT_SIMPLE="$sent_simple" GITHUB_OUTPUT="$out" bash "$body" ) >/dev/null 2>&1 || true
+  if git -C "$up/o.git" rev-parse --verify --quiet 'refs/tags/deployed/prod' >/dev/null; then
+    moved=true
+  else
+    moved=false
+  fi
+  rm -rf "$up" "$wk" "$body" "$out"
+  printf '%s' "$moved"
+}
+
+assert_json_eq "릴리즈 경로 + 전송 확인 → 마커 이동" \
+  "$(marker_case true 123.456 | jq -R .)" '"true"'
+assert_json_eq "릴리즈 경로 + 전송 미확인 → 마커 이동 안 함 (자기치유)" \
+  "$(marker_case true '' | jq -R .)" '"false"'
+assert_json_eq "간소 경로(dev) + 전송 확인 → 마커 이동" \
+  "$(marker_case false '' true | jq -R .)" '"true"'
+assert_json_eq "간소 경로 + 릴리즈 값이 섞여도 간소 확인만 본다" \
+  "$(marker_case false 123.456 true | jq -R .)" '"true"'
+
+# **빈 RELEASE 는 "간소 경로"가 아니라 "알 수 없음"이다.**
+# `always()` 가 붙은 뒤 range·channel 이 실패하면 RELEASE 가 빈 값이 되는데,
+# 그때 마커가 이동하면 알림 0통으로 커밋 범위가 영구 유실된다.
+# (`always()` 이전에는 Actions 가 스텝을 건너뛰어 암묵적으로 보호했다.)
+assert_json_eq "RELEASE 가 빈 값(channel 미실행)이면 마커 이동 안 함" \
+  "$(marker_case '' '' | jq -R .)" '"false"'
+assert_json_eq "RELEASE 빈 값 + SENT 있음이어도 마커 이동 안 함" \
+  "$(marker_case '' 123.456 | jq -R .)" '"false"'
+
+# 간소 경로도 전송 확인을 요구한다 — 릴리즈 경로만 보호하면 거울상 구멍이 남는다.
+assert_json_eq "간소 경로 + 전송 미확인 → 마커 이동 안 함" \
+  "$(marker_case false '' '' | jq -R .)" '"false"'
+assert_json_eq "간소 경로 + 전송 확인 → 마커 이동" \
+  "$(marker_case false '' true | jq -R .)" '"true"'
+
+# --- Create version tag and release : 기존 태그면 warn+skip, 중복 Release 없음 ---
+release_case() {
+  local pretag="$1" ghlog wk body out
+  ghlog="$(mktemp)"; wk="$(mktemp -d)"
+  local ghdir; ghdir="$(mktemp -d)"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$ghlog" > "$ghdir/gh"
+  chmod +x "$ghdir/gh"
+  git init -q --bare "$wk/o.git"; git init -q -b main "$wk/w"
+  git -C "$wk/w" config user.email t@t.io; git -C "$wk/w" config user.name t
+  echo a > "$wk/w/a"; git -C "$wk/w" add -A; git -C "$wk/w" commit -q -m a
+  git -C "$wk/w" remote add origin "$wk/o.git"; git -C "$wk/w" push -q origin main
+  [ -n "$pretag" ] && git -C "$wk/w" tag "$pretag"
+  body="$(mktemp)"; out="$(mktemp)"
+  extract_step "Create version tag and release (prod only)" > "$body"
+  ( cd "$wk/w" && PATH="$ghdir:$PATH" GH_TOKEN=x VERSION=v1.0.0 \
+      CTX="$(cat "$ROOT/tests/fixtures/context_prod.json")" \
+      GITHUB_OUTPUT="$out" bash "$body" ) >/dev/null 2>&1 || true
+  grep -c 'release create' "$ghlog" | tr -d ' '
+  rm -rf "$ghlog" "$ghdir" "$wk" "$body" "$out"
+}
+assert_json_eq "태그가 없으면 Release 를 1회 만든다" \
+  "$(release_case '' | jq -R 'tonumber')" '1'
+assert_json_eq "태그가 이미 있으면 Release 를 만들지 않는다 (중복 방지)" \
+  "$(release_case v1.0.0 | jq -R 'tonumber')" '0'
+
+# 위 두 어서션만으로는 기존-태그 검사의 유무를 구별하지 못한다 — 검사를 지워도
+# `git tag -a` 가 기존 태그에서 어차피 중단되어 `release create` 에 도달하지
+# 않으므로 호출 수는 0으로 같다. **판별 성질은 종료코드다.**
+# 검사가 있으면 warn + exit 0 (재실행이 job 을 붉게 만들지 않는다),
+# 없으면 git 이 exit 128 로 죽는다.
+release_rc() {
+  local pretag="$1" ghdir wk body rc
+  ghdir="$(mktemp -d)"; printf '#!/usr/bin/env bash\nexit 0\n' > "$ghdir/gh"; chmod +x "$ghdir/gh"
+  wk="$(mktemp -d)"
+  git init -q --bare "$wk/o.git"; git init -q -b main "$wk/w"
+  git -C "$wk/w" config user.email t@t.io; git -C "$wk/w" config user.name t
+  echo a > "$wk/w/a"; git -C "$wk/w" add -A; git -C "$wk/w" commit -q -m a
+  git -C "$wk/w" remote add origin "$wk/o.git"; git -C "$wk/w" push -q origin main
+  [ -n "$pretag" ] && git -C "$wk/w" tag "$pretag"
+  body="$(mktemp)"
+  extract_step "Create version tag and release (prod only)" > "$body"
+  ( cd "$wk/w" && PATH="$ghdir:$PATH" GH_TOKEN=x VERSION=v1.0.0 \
+      CTX="$(cat "$ROOT/tests/fixtures/context_prod.json")" \
+      GITHUB_OUTPUT=/dev/null bash "$body" ) >/dev/null 2>&1
+  rc=$?
+  rm -rf "$ghdir" "$wk" "$body"
+  printf '%s' "$rc"
+}
+assert_json_eq "기존 태그에서 warn 후 정상 종료한다 (재실행이 job 을 붉게 하지 않음)" \
+  "$(release_rc v1.0.0 | jq -R 'tonumber')" '0'
+assert_json_eq "태그가 없을 때도 정상 종료한다" \
+  "$(release_rc '' | jq -R 'tonumber')" '0'
+
+# --- 빈 커밋 범위(같은 커밋 재배포)는 릴리즈 경로를 타지 않는다 ---
+# 타면 next-version 이 새 버전을 계산해 내용이 빈 릴리즈와 <!here> 핑을 만든다.
+assert_json_eq "커밋 0건이면 release=false (유령 릴리즈 방지)" \
+  "$(PHASE=result STATUS=success ENVIRONMENT=prod DEV_CH=Cdev REL_CH=Crel \
+     RANGE_JSON='{"base":"a","head":"a","commits":0,"truncated":false}' \
+     run_step "Choose channel" 2>/dev/null | tr '\n' ' ' | jq -Rc .)" \
+  '"release=false id=Cdev "'
+assert_json_eq "커밋 1건 이상이면 release=true 유지" \
+  "$(PHASE=result STATUS=success ENVIRONMENT=prod DEV_CH=Cdev REL_CH=Crel \
+     RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+     run_step "Choose channel" 2>/dev/null | tr '\n' ' ' | jq -Rc .)" \
+  '"release=true id=Crel "'
+
+# 읽을 수 없는 범위는 릴리즈 경로를 **켜 둔 채** 통과해서는 안 된다 (fail-safe).
+ch_range() {
+  PHASE=result STATUS=success ENVIRONMENT=prod DEV_CH=Cdev REL_CH=Crel \
+    RANGE_JSON="$1" run_step "Choose channel" 2>/dev/null | tr '\n' ' ' | jq -Rc .
+}
+assert_json_eq "commits 키가 없으면 release=false (fail-safe)" \
+  "$(ch_range '{"base":"a","head":"b"}')" '"release=false id=Cdev "'
+assert_json_eq "commits 가 null 이면 release=false" \
+  "$(ch_range '{"base":"a","head":"b","commits":null}')" '"release=false id=Cdev "'
+assert_json_eq "RANGE_JSON 이 비면 release=false" \
+  "$(ch_range '')" '"release=false id=Cdev "'
+assert_json_eq "commits 가 \"00\" 이면 release=false (선행 0 은 신뢰하지 않는다)" \
+  "$(ch_range '{"base":"a","head":"b","commits":"00"}')" '"release=false id=Cdev "'
+
+e="$(PHASE=result STATUS=success ENVIRONMENT=prod DEV_CH=Cdev REL_CH=Crel \
+     RANGE_JSON='{"base":"a","head":"b"}' \
+     run_step "Choose channel" 2>&1 >/dev/null || true)"
+case "$e" in
+  *'::warning::'*) _pass "읽을 수 없는 범위는 ::warning:: 으로 알린다" ;;
+  *)               _fail "읽을 수 없는 범위는 ::warning:: 으로 알린다" ;;
+esac

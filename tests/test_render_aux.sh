@@ -75,5 +75,13 @@ assert_json_eq "간소 형식의 빈 argocd_url 은 평문으로" \
 assert_json_eq "간소 형식에 깨진 링크가 생기지 않는다" \
   "$(printf '%s' "$noargo2" | jq '[.. | strings | select(test("<\\|ArgoCD>|https:///"))] | length')" '0'
 
+# base == head (같은 커밋 재배포)를 사람이 읽을 수 있게 명시한다.
+redep="$(jq '.range.base = "aaa" | .range.head = "aaa"' "$CTX" | jq -f "$SJ" --arg phase result)"
+assert_json_eq "같은 커밋 재배포는 '재배포' 로 표기된다" \
+  "$(printf '%s' "$redep" | jq '[.. | strings | select(test("재배포 — 새 커밋 없음"))] | length | . > 0')" 'true'
+newdep="$(jq '.range.base = "aaa" | .range.head = "bbb"' "$CTX" | jq -f "$SJ" --arg phase result)"
+assert_json_eq "다른 커밋이면 재배포 표기가 없다" \
+  "$(printf '%s' "$newdep" | jq '[.. | strings | select(test("재배포"))] | length')" '0'
+
 assert_json_eq "thread 골든" "$th" "$(cat "$ROOT/tests/golden/payload_thread.json")"
 assert_json_eq "simple start 골든" "$st" "$(cat "$ROOT/tests/golden/payload_simple_start.json")"
