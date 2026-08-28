@@ -4,8 +4,14 @@
 <!-- (🛎️ Slack Notice) 이 PR의 변경을 한 줄로 요약합니다. 배포 알림 상단에 그대로 나갑니다.
      비개발 부서도 읽으므로 내부 용어보다 무엇이 달라지는지를 씁니다.
      ⚠️ 이 섹션의 첫 유효 줄만 알림으로 나갑니다. 여러 줄을 써도 두 번째 줄부터는 노출되지 않습니다.
-     ex) [[Jira](https://willog.atlassian.net/browse/CP-2)] 이탈 히스토리 기록 API 신설 -->
-- [[Jira](https://willog.atlassian.net/browse/TICKET)] 여기에 무엇이 달라지는지 한 줄로 적습니다
+     ex) [[Jira](https://willog.atlassian.net/browse/CP-2)] 이탈 히스토리 기록 API 신설
+
+     아래 예시 줄은 주석 안에 있습니다. 실제로 적을 내용으로 이 주석을
+     지우고 그 자리에 써주세요 — 지우지 않으면 이 섹션은 빈 것으로 처리되고
+     알림은 PR 제목으로 대신 나갑니다 (플레이스홀더 문구 그대로 배포 알림에
+     노출되지 않습니다).
+     - [[Jira](https://willog.atlassian.net/browse/TICKET)] 여기에 무엇이 달라지는지 한 줄로 적습니다
+-->
 
 ## 📚 Reference
 - []
