@@ -1,0 +1,31 @@
+{
+  "service_name": "rule-engine",
+  "environment": "stage",
+  "env_label": "Staging",
+  "repo": "willog-platform/willog-rule-engine",
+  "run_id": "1234567",
+  "actor": "barry",
+  "deploy_status": "success",
+  "image_tag": "6185be5-20260828045318",
+  "apps": "api,nginx",
+  "argocd_url": "https://argocd.example/applications/argocd/rule-engine-prod",
+  "channel": "C0STAGE",
+  "mention": "",
+  "range": {
+    "base": "a1b2c3d",
+    "head": "6185be5",
+    "commits": 12,
+    "truncated": false
+  },
+  "version": {
+    "previous": null,
+    "next": "v1.0.0",
+    "bump": "initial"
+  },
+  "prs": [],
+  "changes": {
+    "migrations": [],
+    "api_touched": false,
+    "api_files": []
+  }
+}

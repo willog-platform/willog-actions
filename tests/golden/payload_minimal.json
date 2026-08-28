@@ -1,0 +1,75 @@
+{
+  "attachments": [
+    {
+      "blocks": [
+        {
+          "text": {
+            "text": "🚀  *[ <https://github.com/willog-platform/willog-rule-engine|rule-engine> ]  `v1.0.0`  ·  Staging 배포 완료*",
+            "type": "mrkdwn"
+          },
+          "type": "section"
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "text": {
+            "text": "*이번 배포 내용*\n• 커밋 직접 반영 (PR 없음)",
+            "type": "mrkdwn"
+          },
+          "type": "section"
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "fields": [
+            {
+              "text": "*🌐  환경*\nStaging",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*📦  버전*\n`v1.0.0`",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*📋  포함 PR (0건)*\n없음",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*🖼️  첨부*\n없음",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*🗄️  마이그레이션*\n없음",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*🔗  링크*\n<https://github.com/willog-platform/willog-rule-engine/actions/runs/1234567|Actions> · <https://argocd.example/applications/argocd/rule-engine-prod|ArgoCD>",
+              "type": "mrkdwn"
+            }
+          ],
+          "type": "section"
+        },
+        {
+          "elements": [
+            {
+              "alt_text": "barry",
+              "image_url": "https://github.com/barry.png",
+              "type": "image"
+            },
+            {
+              "text": "*barry* 님이 배포  ·  `6185be5-20260828045318`",
+              "type": "mrkdwn"
+            }
+          ],
+          "type": "context"
+        }
+      ],
+      "color": "#36a64f",
+      "fallback": "🚀 [rule-engine] v1.0.0 · Staging 배포 완료"
+    }
+  ],
+  "channel": "C0STAGE",
+  "text": "🚀 [rule-engine] v1.0.0 · Staging 배포 완료"
+}

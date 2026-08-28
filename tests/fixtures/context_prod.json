@@ -1,0 +1,24 @@
+{
+  "service_name": "rule-engine",
+  "environment": "prod",
+  "env_label": "Production",
+  "repo": "willog-platform/willog-rule-engine",
+  "run_id": "1234567",
+  "actor": "barry",
+  "deploy_status": "success",
+  "image_tag": "6185be5-20260828045318",
+  "apps": "api,nginx",
+  "argocd_url": "https://argocd.example/applications/argocd/rule-engine-prod",
+  "channel": "C0RELEASE",
+  "mention": "<!here>",
+  "range": { "base": "a1b2c3d", "head": "6185be5", "commits": 12, "truncated": false },
+  "version": { "previous": "v1.7.0", "next": "v1.8.0", "bump": "minor" },
+  "prs": [
+    { "number": 95, "title": "fix: NPE \"경계\" 수정", "summary": "NPE \"경계\" 수정",
+      "author": "barry", "labels": ["fix"], "url": "https://github.com/o/r/pull/95", "image_count": 0 },
+    { "number": 94, "title": "이탈 히스토리 구현", "summary": "이탈 히스토리 기록 API 신설",
+      "author": "barry", "labels": ["feature"], "url": "https://github.com/o/r/pull/94", "image_count": 2 }
+  ],
+  "changes": { "migrations": ["V33__excursion_history.sql", "V34__auto_arrival.sql"],
+               "api_touched": true, "api_files": ["WatchAdminController.kt"] }
+}

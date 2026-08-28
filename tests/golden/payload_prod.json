@@ -1,0 +1,82 @@
+{
+  "attachments": [
+    {
+      "blocks": [
+        {
+          "text": {
+            "text": "<!here> 🚀  *[ <https://github.com/willog-platform/willog-rule-engine|rule-engine> ]  `v1.8.0`  ·  Production 배포 완료*",
+            "type": "mrkdwn"
+          },
+          "type": "section"
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "text": {
+            "text": "*이번 배포 내용*\n• NPE \"경계\" 수정\n• 이탈 히스토리 기록 API 신설",
+            "type": "mrkdwn"
+          },
+          "type": "section"
+        },
+        {
+          "text": {
+            "text": "⚠️  *DB 마이그레이션 2건* · *API 표면 변경 (확인 필요)*",
+            "type": "mrkdwn"
+          },
+          "type": "section"
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "fields": [
+            {
+              "text": "*🌐  환경*\nProduction",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*📦  버전*\nv1.7.0 → `v1.8.0`",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*📋  포함 PR (2건)*\n<https://github.com/o/r/pull/94|#94> · <https://github.com/o/r/pull/95|#95>",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*🖼️  첨부*\n스크린샷 2장 → <https://github.com/o/r/pull/94|PR에서 보기>",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*🗄️  마이그레이션*\nV33 · V34",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*🔗  링크*\n<https://github.com/willog-platform/willog-rule-engine/actions/runs/1234567|Actions> · <https://argocd.example/applications/argocd/rule-engine-prod|ArgoCD> · <https://github.com/willog-platform/willog-rule-engine/releases/tag/v1.8.0|Release>",
+              "type": "mrkdwn"
+            }
+          ],
+          "type": "section"
+        },
+        {
+          "elements": [
+            {
+              "alt_text": "barry",
+              "image_url": "https://github.com/barry.png",
+              "type": "image"
+            },
+            {
+              "text": "*barry* 님이 배포  ·  `6185be5-20260828045318`",
+              "type": "mrkdwn"
+            }
+          ],
+          "type": "context"
+        }
+      ],
+      "color": "#36a64f",
+      "fallback": "🚀 [rule-engine] v1.8.0 · Production 배포 완료"
+    }
+  ],
+  "channel": "C0RELEASE",
+  "text": "🚀 [rule-engine] v1.8.0 · Production 배포 완료"
+}
