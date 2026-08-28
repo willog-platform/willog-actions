@@ -154,7 +154,7 @@ secrets
 0. **이 repo(`willog-actions`)의 가시성 결정이 먼저다.** `Checkout willog-actions`
    스텝(`deploy-notify.yml`)에는 `token:` 이 없어 **호출 측 repo 에 스코프된
    `github.token`** 을 쓴다. 이 토큰은 `willog-actions` 가 **private** 이면
-   그 repo를 읽지 못한다. 아래 §5.3의 Access 설정은 reusable workflow *호출*
+   그 repo를 읽지 못한다. 아래 1번의 Access 설정은 reusable workflow *호출*
    권한만 다루고 `actions/checkout` 권한과는 별개다. 셋 중 하나를 택한다:
    - `willog-actions` 를 **public** 으로 둔다 (가장 단순), 또는
    - 스크립트를 `actions/checkout` 대신 **composite action** 으로 소비한다
