@@ -181,7 +181,25 @@ for s in strings(wf):
             bad.append("없는 secret: " + m.group(1)); continue
         m = re.match(r'^steps\.([A-Za-z_][A-Za-z0-9_-]*)\.outputs\.', e)
         if m and m.group(1) not in step_ids:
-            bad.append("없는 step id: " + m.group(1))
+            bad.append("없는 step id: " + m.group(1)); continue
+        # github.* 는 이 워크플로가 쓰기로 한 속성만 허용한다. GitHub 컨텍스트
+        # 전체를 알 수는 없으므로 화이트리스트가 유일한 정적 방어다. 오타
+        # (`github.actorr`)는 Actions 가 조용히 빈 문자열로 만들고, 그 실패는
+        # 배포 로그에도 안 남는다.
+        GITHUB_OK = {"actor", "repository", "run_id", "token", "job_workflow_sha", "sha", "ref_name"}
+        m = re.match(r'^github\.([A-Za-z_][A-Za-z0-9_]*)$', e)
+        if m and m.group(1) not in GITHUB_OK:
+            bad.append("허용되지 않은 github 속성: " + m.group(1)); continue
+        # jobs.X.outputs.Y — X 는 선언된 job, Y 는 그 job 의 output 이어야 한다.
+        m = re.match(r'^jobs\.([A-Za-z_][A-Za-z0-9_-]*)\.outputs\.([A-Za-z_][A-Za-z0-9_-]*)$', e)
+        if m:
+            jid, key = m.group(1), m.group(2)
+            jd = (wf.get("jobs") or {}).get(jid)
+            if jd is None:
+                bad.append("없는 job id: " + jid)
+            elif key not in ((jd.get("outputs") or {})):
+                bad.append("job %s 에 없는 output: %s" % (jid, key))
+            continue
 print("\n".join(sorted(set(bad))))
 PY
 )"
@@ -208,21 +226,24 @@ PY
 
 # --- Build release context ---
 # migration_glob 이 비었거나 공백뿐이면 **gh 호출 전에** 크게 실패해야 한다.
+# `migration_glob` 가드가 gh **호출 전에** 발동하는지 직접 측정한다.
+# 에러 문안 부분문자열에 의존하면 문안 변경 시 조용히 가드가 사라진다.
 for glob in '' '   '; do
-  e="$(MIGRATION_GLOB="$glob" ENVIRONMENT=prod SERVICE_NAME=svc REPO=o/r RUN_ID=1 \
+  ghlog="$(mktemp)"; ghdir="$(mktemp -d)"
+  printf '#!/usr/bin/env bash\nprintf "called\\n" >> "%s"\nexit 1\n' "$ghlog" > "$ghdir/gh"
+  chmod +x "$ghdir/gh"
+  e="$(PATH="$ghdir:$PATH" MIGRATION_GLOB="$glob" ENVIRONMENT=prod SERVICE_NAME=svc REPO=o/r RUN_ID=1 \
        ACTOR=a IMAGE_TAG=t APPS=api ARGOCD_URL=https://a CHANNEL=C1 \
        RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
        MAX_COMMITS=100 API_GLOB= API_EXCLUDE= VERSION_BUMP=auto GH_TOKEN=x \
-       GH=/nonexistent/gh \
        run_step "Build release context" 2>&1 >/dev/null || true)"
   case "$e" in
     *'::error::'*) _pass "migration_glob='${glob}' 은 ::error:: 로 거부된다" ;;
     *)             _fail "migration_glob='${glob}' 이 거부되지 않았다" ;;
   esac
-  case "$e" in
-    *'조회 실패'*) _fail "migration_glob='${glob}' 에서 gh 를 먼저 호출했다" ;;
-    *)             _pass "migration_glob='${glob}' 에서 gh 호출 전에 실패한다" ;;
-  esac
+  assert_json_eq "migration_glob='${glob}' 에서 gh 호출 0회 (실측)" \
+    "$(wc -l < "$ghlog" | tr -d ' ' | jq -R 'tonumber')" '0'
+  rm -rf "$ghlog" "$ghdir"
 done
 
 # --- Send release note ---
@@ -254,6 +275,20 @@ o="$(send_with '{"ok":true,"ts":"123.456"}' '{"ok":true,"ts":"9"}')"
 assert_json_eq "본문 성공 시 thread_ts 가 설정된다" \
   "$(printf '%s' "$o" | jq -Rsc 'split("\n") | map(select(startswith("thread_ts=")))')" \
   '["thread_ts=123.456"]'
+
+# `ts` 가 없는 `ok:true` 응답. `jq -r '.ts'` 였다면 문자열 "null" 을 내
+# thread_ts=null 로 GITHUB_OUTPUT 에 쓰이고, 그것은 비어 있지 않아 Task 11의
+# 마커 태그 게이트(`thread_ts != ''`)를 통과해 버린다 — 전송이 확인되지
+# 않았는데 태그가 이동하는 자기치유 붕괴. `.ts // empty` 는 이 응답에서
+# thread_ts 를 전혀 내지 않고 job 을 실패시켜야 한다.
+o="$(send_with '{"ok":true}' '{"ok":true,"ts":"9"}')"
+assert_json_eq "ts 없는 ok:true 에서 thread_ts 가 설정되지 않는다 (null 로 새지 않는다)" \
+  "$(printf '%s' "$o" | jq -Rsc 'split("\n") | map(select(startswith("thread_ts=")))')" '[]'
+if send_rc '{"ok":true}' '{"ok":true,"ts":"9"}'; then
+  _fail "ts 없는 ok:true 인데 job 이 성공했다"
+else
+  _pass "ts 없는 ok:true 는 job 을 실패시킨다"
+fi
 
 o="$(send_with '{"ok":false,"error":"invalid_blocks"}' '{"ok":true,"ts":"9"}')"
 assert_json_eq "본문 실패 시 thread_ts 가 설정되지 않는다" \
