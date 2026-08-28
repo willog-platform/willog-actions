@@ -17,16 +17,24 @@ sys.exit('step not found: ' + name)
 PY
 }
 
-# run_step <스텝 이름> — GITHUB_OUTPUT 을 임시파일로 두고 실행한다.
-#   stdout: GITHUB_OUTPUT 내용,  stderr: 스텝의 로그(경고 등)
+# run_step <스텝 이름> — 실제 러너와 같은 레이아웃에서 실행한다.
+#   체크아웃 루트를 임시 디렉토리로 만들고 `.willog-actions` 가 이 repo 를
+#   가리키게 한다. 실제 워크플로도 그 경로로 스크립트를 참조한다.
+#   stdout: GITHUB_OUTPUT 내용,  stderr: 스텝의 로그
 run_step() {
   local name="$1"; shift
-  local body out
-  body="$(mktemp)"; out="$(mktemp)"
+  local body out work rc
+  body="$(mktemp)"; out="$(mktemp)"; work="$(mktemp -d)"
+  ln -s "$ROOT" "$work/.willog-actions"
   extract_step "$name" > "$body"
-  GITHUB_OUTPUT="$out" bash "$body" >&2
+  ( cd "$work" && GITHUB_OUTPUT="$out" bash "$body" ) >&2
+  # 추출된 스텝의 종료코드를 그대로 되돌린다. 정리(`rm -rf`)가 마지막 문장이면
+  # 그 종료코드가 함수 반환값을 덮어써 스텝이 실패해도 항상 0으로 보인다 —
+  # "본문 실패는 job을 실패시킨다" 같은 성질은 이 값을 보고 판정하므로 필수.
+  rc=$?
   cat "$out"
-  rm -f "$body" "$out"
+  rm -rf "$body" "$out" "$work"
+  return "$rc"
 }
 
 # --- Resolve ArgoCD URL ---
@@ -96,3 +104,174 @@ case "$e" in
   *'::warning::'*) _fail "릴리즈 채널이 지정됐는데 경고가 났다 (경고 피로)" ;;
   *)               _pass "릴리즈 채널 지정 시에는 경고가 없다" ;;
 esac
+
+# --- env: 블록과 run: 본문의 변수 참조가 일치하는가 (정적 검사) ---
+# 하네스가 변수를 직접 주입하는 구조상, YAML 의 env: 매핑이 깨져도 런타임
+# 테스트는 통과한다. 참조되는데 env: 에 없는 변수를 정적으로 잡아낸다.
+missing="$(python3 - "$WF" <<'PY'
+import re, sys, pathlib, yaml
+wf = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())
+# 러너가 제공하는 변수와 셸 빌트인은 제외한다.
+PROVIDED = {
+    "GITHUB_OUTPUT", "GITHUB_ENV", "GITHUB_PATH", "GITHUB_STEP_SUMMARY",
+    "GITHUB_SHA", "GITHUB_REF", "GITHUB_WORKSPACE", "GITHUB_REPOSITORY",
+    "HOME", "PATH", "PWD", "IFS", "RUNNER_TEMP", "RUNNER_OS",
+}
+bad = []
+for job in (wf.get("jobs") or {}).values():
+    for st in (job.get("steps") or []):
+        run = st.get("run")
+        if not run:
+            continue
+        declared = set((st.get("env") or {}).keys())
+        # 본문에서 대입되는 지역 변수도 제외한다. 줄 시작뿐 아니라
+        # `case ... in dev) HOST=... ;;` 처럼 case 분기 라벨(`)`) 바로
+        # 뒤에서 대입되는 관용구도 지역 변수로 인정한다 — 그렇지 않으면
+        # 이 파일의 기존 `Resolve ArgoCD URL`/`Build simple context` 스텝의
+        # HOST·LABEL 이 오탐으로 잡힌다.
+        local = set(re.findall(r'(?:^|\))\s*([A-Z_][A-Z0-9_]*)=', run, re.M))
+        local |= set(re.findall(r'\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b', run))
+        used = set(re.findall(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', run))
+        for v in sorted(used - declared - local - PROVIDED):
+            bad.append("%s: %s" % (st.get("name", "?"), v))
+print("\n".join(bad))
+PY
+)"
+if [ -z "$missing" ]; then
+  _pass "run: 본문이 참조하는 모든 변수가 env: 에 선언되어 있다"
+else
+  _fail "env: 에 없는 변수를 참조한다 — ${missing}"
+fi
+
+# --- ${{ }} 표현식이 실존하는 대상을 가리키는가 (정적 검사) ---
+# 키 이름 대조(위 검사)로는 `${{ inputs.enviroment }}` 처럼 **오른쪽**이 틀린
+# 경우를 못 잡는다. 그것이 이 검사군을 만든 동기였던 결함이므로 따로 막는다.
+badref="$(python3 - "$WF" <<'PY'
+import re, sys, pathlib, yaml
+wf = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())
+# 주의: YAML 1.1 은 `on` 을 불리언 True 로 읽는다. PyYAML 도 그렇게 한다.
+on = wf.get("on") if wf.get("on") is not None else wf.get(True)
+wc = (on or {}).get("workflow_call") or {}
+inputs  = set((wc.get("inputs")  or {}).keys())
+secrets = set((wc.get("secrets") or {}).keys())
+jobs = list((wf.get("jobs") or {}).values())
+step_ids = {st["id"] for j in jobs for st in (j.get("steps") or []) if st.get("id")}
+bad = []
+# YAML 로 파싱된 문자열 값만 훑는다 — 원본 텍스트 전체를 훑으면 주석에 적힌
+# 예시(가령 이 검사군의 동기가 된 `${{ inputs.y }}` 같은 설명용 오탐 리터럴)까지
+# 실제 표현식으로 오인한다. 주석은 파싱 단계에서 이미 사라지므로 이 방법이 아니면
+# "실제로 평가되는 표현식"과 "사람이 읽는 설명"을 구분할 수 없다.
+def strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for v in node.values():
+            yield from strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from strings(v)
+for s in strings(wf):
+    for expr in re.findall(r'\$\{\{([^}]*)\}\}', s):
+        e = expr.strip()
+        m = re.match(r'^inputs\.([A-Za-z_][A-Za-z0-9_]*)$', e)
+        if m and m.group(1) not in inputs:
+            bad.append("없는 input: " + m.group(1)); continue
+        m = re.match(r'^secrets\.([A-Za-z_][A-Za-z0-9_]*)$', e)
+        if m and m.group(1) not in secrets:
+            bad.append("없는 secret: " + m.group(1)); continue
+        m = re.match(r'^steps\.([A-Za-z_][A-Za-z0-9_-]*)\.outputs\.', e)
+        if m and m.group(1) not in step_ids:
+            bad.append("없는 step id: " + m.group(1))
+print("\n".join(sorted(set(bad))))
+PY
+)"
+if [ -z "$badref" ]; then
+  _pass "모든 \${{ }} 표현식이 실존하는 input·secret·step 을 가리킨다"
+else
+  _fail "실존하지 않는 대상을 가리키는 표현식 — ${badref}"
+fi
+
+# --- gh CLI 가 암묵적으로 소비하는 변수는 이름 대조로 보호되지 않는다 ---
+# GH_TOKEN 은 `$GH_TOKEN` 으로 본문에서 참조되지 않고 gh CLI 가 환경에서 읽는다.
+# 그래서 위 두 검사 어느 쪽도 이 키의 삭제를 잡지 못한다. 명시적으로 못 박는다.
+assert_json_eq "release_ctx 가 GH_TOKEN 을 선언한다 (gh CLI 가 암묵 소비)" \
+  "$(python3 - "$WF" <<'PY'
+import sys, pathlib, yaml
+wf = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())
+for j in (wf.get("jobs") or {}).values():
+    for st in (j.get("steps") or []):
+        if st.get("id") == "release_ctx":
+            print("true" if "GH_TOKEN" in (st.get("env") or {}) else "false"); raise SystemExit
+print("false")
+PY
+)" 'true'
+
+# --- Build release context ---
+# migration_glob 이 비었거나 공백뿐이면 **gh 호출 전에** 크게 실패해야 한다.
+for glob in '' '   '; do
+  e="$(MIGRATION_GLOB="$glob" ENVIRONMENT=prod SERVICE_NAME=svc REPO=o/r RUN_ID=1 \
+       ACTOR=a IMAGE_TAG=t APPS=api ARGOCD_URL=https://a CHANNEL=C1 \
+       RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+       MAX_COMMITS=100 API_GLOB= API_EXCLUDE= VERSION_BUMP=auto GH_TOKEN=x \
+       GH=/nonexistent/gh \
+       run_step "Build release context" 2>&1 >/dev/null || true)"
+  case "$e" in
+    *'::error::'*) _pass "migration_glob='${glob}' 은 ::error:: 로 거부된다" ;;
+    *)             _fail "migration_glob='${glob}' 이 거부되지 않았다" ;;
+  esac
+  case "$e" in
+    *'조회 실패'*) _fail "migration_glob='${glob}' 에서 gh 를 먼저 호출했다" ;;
+    *)             _pass "migration_glob='${glob}' 에서 gh 호출 전에 실패한다" ;;
+  esac
+done
+
+# --- Send release note ---
+# 가짜 curl 을 PATH 앞에 두고 Slack 응답을 통제한다.
+fake_curl() {
+  local main="$1" thread="$2" dir
+  dir="$(mktemp -d)"
+  { printf '#!/usr/bin/env bash\n'
+    printf 'if [ -f "%s/called" ]; then printf %%s %s; else : > "%s/called"; printf %%s %s; fi\n' \
+      "$dir" "'$thread'" "$dir" "'$main'"
+  } > "$dir/curl"
+  chmod +x "$dir/curl"
+  printf '%s' "$dir"
+}
+send_with() {
+  local d; d="$(fake_curl "$1" "$2")"
+  PATH="$d:$PATH" TOKEN=x CTX="$(cat "$ROOT/tests/fixtures/context_prod.json")" \
+    run_step "Send release note" 2>/dev/null
+  rm -rf "$d"
+}
+send_rc() {
+  local d; d="$(fake_curl "$1" "$2")"
+  ( PATH="$d:$PATH" TOKEN=x CTX="$(cat "$ROOT/tests/fixtures/context_prod.json")" \
+    run_step "Send release note" >/dev/null 2>&1 )
+  local rc=$?; rm -rf "$d"; return $rc
+}
+
+o="$(send_with '{"ok":true,"ts":"123.456"}' '{"ok":true,"ts":"9"}')"
+assert_json_eq "본문 성공 시 thread_ts 가 설정된다" \
+  "$(printf '%s' "$o" | jq -Rsc 'split("\n") | map(select(startswith("thread_ts=")))')" \
+  '["thread_ts=123.456"]'
+
+o="$(send_with '{"ok":false,"error":"invalid_blocks"}' '{"ok":true,"ts":"9"}')"
+assert_json_eq "본문 실패 시 thread_ts 가 설정되지 않는다" \
+  "$(printf '%s' "$o" | jq -Rsc 'split("\n") | map(select(startswith("thread_ts=")))')" '[]'
+if send_rc '{"ok":false,"error":"invalid_blocks"}' '{"ok":true,"ts":"9"}'; then
+  _fail "본문 실패인데 job 이 성공했다"
+else
+  _pass "본문 실패는 job 을 실패시킨다"
+fi
+
+# 스레드 실패는 job 을 실패시키지 않고 thread_ts 를 보존한다 —
+# Task 11 이 이 값으로 마커 태그 이동을 게이트하므로 이 성질이 자기치유의 핵심이다.
+o="$(send_with '{"ok":true,"ts":"123.456"}' '{"ok":false,"error":"x"}')"
+assert_json_eq "스레드 실패에도 thread_ts 는 보존된다" \
+  "$(printf '%s' "$o" | jq -Rsc 'split("\n") | map(select(startswith("thread_ts=")))')" \
+  '["thread_ts=123.456"]'
+if send_rc '{"ok":true,"ts":"123.456"}' '{"ok":false,"error":"x"}'; then
+  _pass "스레드 실패는 job 을 실패시키지 않는다"
+else
+  _fail "스레드 실패가 job 을 실패시켰다"
+fi

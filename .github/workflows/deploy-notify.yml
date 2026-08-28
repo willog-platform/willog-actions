@@ -33,10 +33,8 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     outputs:
-      # 스레드 ts 는 릴리즈 노트 경로에서만 생긴다. 간소 경로는 스레드를 만들지
-      # 않으므로 여기서는 빈 값이고, Task 10 이 `send` 스텝을 추가하면서
-      # `${{ steps.send.outputs.thread_ts }}` 로 바꾼다.
-      thread_ts: ''
+      thread_ts: ${{ steps.send.outputs.thread_ts }}
+      version:   ${{ steps.release_ctx.outputs.version }}
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@v6
@@ -197,3 +195,116 @@ jobs:
             --data-binary "$PAYLOAD")"
           printf '%s' "$RESP" | jq -e '.ok' >/dev/null \
             || { printf '::error::Slack 전송 실패: %s\n' "$(printf '%s' "$RESP" | jq -r '.error // "unknown"')"; exit 1; }
+
+      - name: Build release context
+        id: release_ctx
+        if: ${{ steps.channel.outputs.release == 'true' }}
+        env:
+          # `${{ }}` 를 run: 본문에 보간하지 않는다 (Actions 스크립트 인젝션).
+          # 전량 env 로 넘기고 "$VAR" 로만 읽는다.
+          GH_TOKEN: ${{ github.token }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          MAX_COMMITS: ${{ inputs.max_commits }}
+          MIGRATION_GLOB: ${{ inputs.migration_glob }}
+          API_GLOB: ${{ inputs.api_path_glob }}
+          API_EXCLUDE: ${{ inputs.api_exclude_glob }}
+          VERSION_BUMP: ${{ inputs.version_bump }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          APPS: ${{ inputs.apps }}
+          ARGOCD_URL: ${{ steps.argo.outputs.url }}
+          CHANNEL: ${{ steps.channel.outputs.id }}
+          RANGE_JSON: ${{ steps.range.outputs.json }}
+        run: |
+          set -euo pipefail
+          S=.willog-actions/scripts
+          RANGE="$RANGE_JSON"
+          BASE="$(printf '%s' "$RANGE" | jq -r '.base')"
+          HEAD_SHA="$(printf '%s' "$RANGE" | jq -r '.head')"
+
+          # 공백만인 값도 거부한다. `[ -n " " ]` 은 참이므로 트림 없이는
+          # 파이프라인이 collect-prs.sh(커밋당 gh api 호출)와 fetch-prs.sh 까지
+          # 진행한 뒤 detect-changes.sh 안쪽 가드에서야 죽는다. 최종 안전성은
+          # 같지만 "일 시작 전에 크게 실패한다"가 지켜지지 않고 API 호출을 낭비한다.
+          if [ -z "$(printf '%s' "$MIGRATION_GLOB" | tr -d '[:space:]')" ]; then
+            echo "::error::migration_glob 이 비어 있거나 공백뿐입니다 (repo마다 경로가 다릅니다)"
+            exit 1
+          fi
+
+          NUMS="$(bash "$S/collect-prs.sh" "$REPO" "$BASE" "$HEAD_SHA")"
+          RAW="$(bash "$S/fetch-prs.sh"   "$REPO" "$NUMS")"
+          PRS="$(printf '%s' "$RAW" | jq -f "$S/summarize.jq")"
+
+          CHANGES="$(bash "$S/detect-changes.sh" "$BASE" "$HEAD_SHA" \
+                      "$MIGRATION_GLOB" "$API_GLOB" "$API_EXCLUDE")"
+
+          LABELS="$(printf '%s' "$PRS" | jq -c '[.[].labels[]] | unique')"
+          VERSION="$(bash "$S/next-version.sh" "$LABELS" "$VERSION_BUMP")"
+
+          case "$ENVIRONMENT" in
+            stage) LABEL=Staging ;; prod) LABEL=Production ;; *) LABEL="$ENVIRONMENT" ;;
+          esac
+          MENTION=""
+          if [ "$ENVIRONMENT" = "prod" ]; then MENTION="<!here>"; fi
+
+          # `-c` 필수: 여러 줄 JSON 을 GITHUB_OUTPUT 에 쓰면 줄 단위 파서가
+          # 깨져 임의 output 주입이 가능하다.
+          CTX="$(jq -n -c \
+            --arg service_name  "$SERVICE_NAME" \
+            --arg environment   "$ENVIRONMENT" \
+            --arg env_label     "$LABEL" \
+            --arg repo          "$REPO" \
+            --arg run_id        "$RUN_ID" \
+            --arg actor         "$ACTOR" \
+            --arg deploy_status 'success' \
+            --arg image_tag     "$IMAGE_TAG" \
+            --arg apps          "$APPS" \
+            --arg argocd_url    "$ARGOCD_URL" \
+            --arg channel       "$CHANNEL" \
+            --arg mention       "$MENTION" \
+            --argjson range     "$RANGE" \
+            --argjson version   "$VERSION" \
+            --argjson prs       "$PRS" \
+            --argjson changes   "$CHANGES" \
+            '{service_name:$service_name, environment:$environment, env_label:$env_label,
+              repo:$repo, run_id:$run_id, actor:$actor, deploy_status:$deploy_status,
+              image_tag:$image_tag, apps:$apps, argocd_url:$argocd_url, channel:$channel,
+              mention:$mention, range:$range, version:$version, prs:$prs, changes:$changes}')"
+
+          printf 'json=%s\n' "$CTX" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$(printf '%s' "$VERSION" | jq -r '.next')" >> "$GITHUB_OUTPUT"
+
+      - name: Send release note
+        id: send
+        if: ${{ steps.channel.outputs.release == 'true' }}
+        env:
+          TOKEN: ${{ secrets.SLACK_NOTIFICATION_TOKEN }}
+          CTX: ${{ steps.release_ctx.outputs.json }}
+        run: |
+          set -euo pipefail
+          S=.willog-actions/scripts
+
+          MAIN="$(printf '%s' "$CTX" | jq -f "$S/render-main.jq")"
+          # 타임아웃 없는 curl 은 Slack 이 응답하지 않을 때 job 타임아웃까지
+          # 매달린다. 알림 하나 때문에 러너를 붙잡아 둘 이유가 없다.
+          RESP="$(curl -sS --connect-timeout 10 --max-time 30 -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data-binary "$MAIN")"
+          printf '%s' "$RESP" | jq -e '.ok' >/dev/null \
+            || { printf '::error::Slack 본체 전송 실패: %s\n' "$(printf '%s' "$RESP" | jq -r '.error // "unknown"')"; exit 1; }
+
+          TS="$(printf '%s' "$RESP" | jq -r '.ts')"
+          echo "thread_ts=${TS}" >> "$GITHUB_OUTPUT"
+
+          THREAD="$(printf '%s' "$CTX" | jq -f "$S/render-thread.jq" --arg thread_ts "$TS")"
+          RESP2="$(curl -sS --connect-timeout 10 --max-time 30 -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data-binary "$THREAD")"
+          # 스레드 실패는 본체를 무효화하지 않는다. 경고로만 남긴다.
+          printf '%s' "$RESP2" | jq -e '.ok' >/dev/null \
+            || printf '::warning::스레드 답글 전송 실패: %s\n' "$(printf '%s' "$RESP2" | jq -r '.error // "unknown"')"
