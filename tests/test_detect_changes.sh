@@ -93,3 +93,19 @@ esac
 
 # migration_glob 은 필수이므로 공백만인 값은 조용히 넘기지 않고 크게 실패한다.
 assert_fail "공백만인 migration_glob 은 die" bash "$S" "$BASE" "$HEAD_SHA" '  '
+
+# --- 항목 6: --diff-filter=A 는 "추가된" 마이그레이션만 잡아야 한다 ---
+# 스펙 §4.2: "추가된 마이그레이션만 (A). 수정은 릴리즈 노트에 무의미하다."
+# ACMR 로 바꿔도 스위트가 green 이었다(기존 픽스처는 추가와 수정을 같은
+# 범위/커밋에 함께 넣지 않았다). 마이그레이션을 한 커밋에서 추가하고 **다음
+# 커밋에서 수정**한 뒤, 수정만 포함하는 범위(BASE=추가 커밋, HEAD=수정 커밋)
+# 로 호출하면 migrations 는 빈 배열이어야 한다 — 이 범위에서 그 파일의 diff
+# 상태는 M(수정) 뿐이고 A(추가)가 아니다.
+ADD_SHA="$(git -C "$d" rev-parse HEAD)"
+echo "-- v1 변경" >> "$d/src/main/resources/db/migration/V33__excursion_history.sql"
+git -C "$d" add -A; git -C "$d" commit -q -m "modify migration"
+MOD_SHA="$(git -C "$d" rev-parse HEAD)"
+
+out="$(cd "$d" && bash "$S" "$ADD_SHA" "$MOD_SHA" 'src/main/resources/db/migration/V*.sql' 2>/dev/null)"
+assert_json_eq "추가 커밋 이후 수정만 있는 범위는 migrations 가 비어야 한다 (--diff-filter=A)" \
+  "$(printf '%s' "$out" | jq '.migrations')" '[]'

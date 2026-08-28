@@ -22,6 +22,30 @@ assert_json_eq "start 문안" "$(printf '%s' "$st" | jq '.text | test("배포 �
 fl="$(jq '.deploy_status="failure"' "$CTX" | jq -f "$SJ" --arg phase result)"
 assert_json_eq "failure 색상" "$(printf '%s' "$fl" | jq '.attachments[0].color')" '"#dc3545"'
 
+# --- 간소 형식: cancelled (4개 미결 항목 중 하나) ---
+# argocd-sync 는 660s 타임아웃을 가지고, 취소는 실패와 구별되는 실제 상태다.
+# 현행은 success 가 아닌 모든 것을 ❌ 배포 실패로 뭉뚱그렸다.
+cl="$(jq '.deploy_status="cancelled"' "$CTX" | jq -f "$SJ" --arg phase result)"
+assert_json_eq "cancelled 색상은 중립(회색)" \
+  "$(printf '%s' "$cl" | jq '.attachments[0].color')" '"#808080"'
+assert_json_eq "cancelled 헤드라인은 배포 취소" \
+  "$(printf '%s' "$cl" | jq '.text | test("배포 취소")')" 'true'
+assert_json_eq "cancelled 헤드라인에 실패 문구가 없다" \
+  "$(printf '%s' "$cl" | jq '.text | test("배포 실패")')" 'false'
+assert_json_eq "cancelled 푸터는 취소를 실패와 구분해 알린다" \
+  "$(printf '%s' "$cl" | jq '[.. | strings | select(test("취소"))] | length | . > 0')" 'true'
+assert_json_eq "cancelled 푸터에 오류 발생 문구가 없다" \
+  "$(printf '%s' "$cl" | jq '[.. | strings | select(test("오류가 발생했습니다"))] | length')" '0'
+
+# failure/빈 값/알 수 없는 값은 여전히 빨간 실패 분기로 떨어진다.
+for bad in failure '' typo_unknown_status; do
+  bd="$(jq --arg s "$bad" '.deploy_status=$s' "$CTX" | jq -f "$SJ" --arg phase result)"
+  assert_json_eq "deploy_status='${bad}' 는 여전히 실패(빨강) 분기" \
+    "$(printf '%s' "$bd" | jq '.attachments[0].color')" '"#dc3545"'
+  assert_json_eq "deploy_status='${bad}' 는 배포 실패 헤드라인" \
+    "$(printf '%s' "$bd" | jq '.text | test("배포 실패")')" 'true'
+done
+
 # --- esc 정의가 세 렌더러에서 동일한지 검사 ---
 # 이스케이프 함수를 세 파일에 복제했으므로, 하나만 고치고 나머지를 잊는 것이
 # 이 설계의 유일한 실패 모드다. 정의 줄이 동일한지 기계적으로 확인한다.
@@ -82,6 +106,11 @@ assert_json_eq "같은 커밋 재배포는 '재배포' 로 표기된다" \
 newdep="$(jq '.range.base = "aaa" | .range.head = "bbb"' "$CTX" | jq -f "$SJ" --arg phase result)"
 assert_json_eq "다른 커밋이면 재배포 표기가 없다" \
   "$(printf '%s' "$newdep" | jq '[.. | strings | select(test("재배포"))] | length')" '0'
+
+# --- 빈 image_tag 는 빈 코드스팬이 아니라 '-' 로 (I1, render-thread.jq) ---
+noimg_th="$(jq '.image_tag = ""' "$CTX" | jq -f "$TJ" --arg thread_ts "1.1")"
+assert_json_eq "스레드의 빈 image_tag 는 '-' 로 렌더된다" \
+  "$(printf '%s' "$noimg_th" | jq '.text | test("이미지 태그\\*  `-`")')" 'true'
 
 assert_json_eq "thread 골든" "$th" "$(cat "$ROOT/tests/golden/payload_thread.json")"
 assert_json_eq "simple start 골든" "$st" "$(cat "$ROOT/tests/golden/payload_simple_start.json")"

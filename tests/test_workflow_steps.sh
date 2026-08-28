@@ -253,6 +253,98 @@ for glob in '' '   '; do
   rm -rf "$ghlog" "$ghdir"
 done
 
+# --- 항목 7: Build simple context / Send simple notification ---
+# 이 두 스텝은 Phase 0 (dev 배포·시작 알림·모든 실패)의 1단계이고, 다른
+# run: 본문은 전부 이 파일에서 스텝 레벨로 검증되는데 이 둘만 빠져 있었다.
+sc_ctx() {
+  SERVICE_NAME=svc ENVIRONMENT=prod REPO=o/r RUN_ID=1 ACTOR=barry \
+    DEPLOY_STATUS=success IMAGE_TAG=abc123 APPS=api ARGOCD_URL=https://a CHANNEL=C1 \
+    RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+    run_step "Build simple context" 2>/dev/null
+}
+o="$(sc_ctx)"
+# `wc -l` 은 줄바꿈 문자 수를 센다. `$( )` 명령치환은 후행 개행을 지우므로
+# `printf '%s\n'` 로 하나 되돌려 붙여야 "내용이 있는 한 줄" 이 0으로
+# 잘못 세지 않는다.
+assert_json_eq "Build simple context 의 \$GITHUB_OUTPUT 은 정확히 한 줄" \
+  "$(printf '%s\n' "$o" | wc -l | tr -d ' ')" '1'
+assert_json_eq "출력이 json= 접두사로 시작한다" \
+  "$(printf '%s' "$o" | cut -c1-5 | jq -Rc .)" '"json="'
+CTXJSON="${o#json=}"
+assert_json_eq "environment prod → env_label Production" \
+  "$(printf '%s' "$CTXJSON" | jq '.env_label')" '"Production"'
+assert_json_eq "channel·range·image_tag 가 그대로 전달된다" \
+  "$(printf '%s' "$CTXJSON" | jq -c '{channel, image_tag, range}')" \
+  '{"channel":"C1","image_tag":"abc123","range":{"base":"a","head":"b","commits":1,"truncated":false}}'
+
+# **보안 동기 불변식 (변이에서 살아남음):** `simple_ctx` 의 `jq -n` 에서 `-c`
+# 를 지워도 스위트가 green 이었다 — 주석은 이것이 출력 인젝션 방어에
+# "필수" 라고 못 박는데, 그 성질을 지키는 회귀 테스트가 없었다. `-c` 가
+# 없으면 jq 가 여러 줄로 예쁘게 출력하고, 그 여러 줄 값이 그대로
+# `$GITHUB_OUTPUT` 에 `json=...` 으로 쓰이면 GitHub 의 줄 단위 파서가 깨져
+# 임의의 output 이 주입될 수 있다. "정확히 한 줄" 어서션(위)이 이 불변식을
+# 직접 지킨다 — `-c` 가 사라지면 이 어서션이 깨진다(아래에서 실측 증명).
+
+# --- Send simple notification ---
+fake_curl_once() {
+  local resp="$1" dir
+  dir="$(mktemp -d)"
+  { printf '#!/usr/bin/env bash\n'
+    printf 'printf %%s %s\n' "'$resp'"
+  } > "$dir/curl"
+  chmod +x "$dir/curl"
+  printf '%s' "$dir"
+}
+SIMPLE_CTX='{"channel":"C1","service_name":"svc","environment":"dev","env_label":"Development","repo":"o/r","run_id":"1","actor":"barry","deploy_status":"","image_tag":"","apps":"api","argocd_url":"https://a","range":{"base":"a","head":"b","commits":1,"truncated":false}}'
+send_simple_with() {
+  local d; d="$(fake_curl_once "$1")"
+  PATH="$d:$PATH" TOKEN=x PHASE=start CTX="$SIMPLE_CTX" run_step "Send simple notification" 2>/dev/null
+  rm -rf "$d"
+}
+send_simple_rc() {
+  local d; d="$(fake_curl_once "$1")"
+  ( PATH="$d:$PATH" TOKEN=x PHASE=start CTX="$SIMPLE_CTX" run_step "Send simple notification" >/dev/null 2>&1 )
+  local rc=$?; rm -rf "$d"; return $rc
+}
+o="$(send_simple_with '{"ok":true,"ts":"1.1"}')"
+assert_json_eq "성공 시 sent=true 가 출력된다" \
+  "$(printf '%s' "$o" | jq -Rsc 'split("\n") | map(select(startswith("sent=")))')" '["sent=true"]'
+if send_simple_rc '{"ok":false,"error":"channel_not_found"}'; then
+  _fail "Slack 응답 ok:false 인데 job 이 성공했다"
+else
+  _pass "Slack 응답 ok:false 는 job 을 실패시킨다"
+fi
+o2="$(send_simple_with '{"ok":false,"error":"channel_not_found"}')"
+assert_json_eq "실패 시 sent= 출력이 없다" \
+  "$(printf '%s' "$o2" | jq -Rsc 'split("\n") | map(select(startswith("sent=")))')" '[]'
+
+# --- 항목 7 불변식 증명: -c 를 지운 스크래치 워크플로에서는 위 '정확히 한 줄' 이 깨진다 ---
+NOC_WF="$(mktemp -d)/deploy-notify-noc.yml"
+python3 - "$WF" "$NOC_WF" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src).read()
+target = "          CTX=\"$(jq -n -c \\\n"
+idx = text.find("Build simple context")
+# simple_ctx 스텝 안의 `jq -n -c` 하나만 `-c` 제거 (다른 스텝은 그대로 둔다).
+seg = text[idx: idx + 2000]
+patched = seg.replace("jq -n -c \\", "jq -n \\", 1)
+assert patched != seg, "패치 대상을 찾지 못했다"
+text = text[:idx] + patched + text[idx + 2000:]
+open(dst, "w").write(text)
+PY
+WF_SAVED="$WF"
+WF="$NOC_WF"
+o_noc="$(sc_ctx)"
+LINES_NOC="$(printf '%s\n' "$o_noc" | wc -l | tr -d ' ')"
+WF="$WF_SAVED"
+printf '  [증명] -c 제거 스크래치의 Build simple context 출력 줄 수: %s (1 이 아니어야 어서션이 이 불변식을 지킴을 증명)\n' "$LINES_NOC"
+if [ "$LINES_NOC" != "1" ]; then
+  _pass "증명: -c 를 지우면 \$GITHUB_OUTPUT 이 한 줄이 아니게 된다 (불변식이 실제로 보호됨)"
+else
+  _fail "증명 실패: -c 를 지웠는데도 한 줄로 남았다"
+fi
+
 # --- Send release note ---
 # 가짜 curl 을 PATH 앞에 두고 Slack 응답을 통제한다.
 fake_curl() {

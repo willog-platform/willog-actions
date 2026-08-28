@@ -94,6 +94,20 @@ assert_json_eq "PR 필드는 12건까지 보이고 접힌다" \
 assert_json_eq "마이그레이션 필드는 10건까지 보이고 접힌다" \
   "$(printf '%s' "$big" | jq '[.attachments[0].blocks[] | .fields? // [] | .[] | .text | select(test("마이그레이션"))] | .[0] | test("그 외 20건")')" 'true'
 
+# --- 항목 6: clip(1800) 백스톱이 실제로 닿는 케이스 ---
+# 위 "30건" 케이스는 fold 가 10건까지만 보이므로 짧은 이름으로도 접기(fold)
+# 자체가 상한을 지켜준다 — clip(1800) 을 지워도 green 이다(실측: 이 픽스처는
+# clip 없이도 필드가 2000자를 넘지 않는다). realistic 한 Node 마이그레이션
+# 파일명(타임스탬프 + 설명적인 이름)은 이보다 훨씬 길 수 있다. 아래는 12건 ×
+# ~230자 이름으로 fold 후에도(상위 10건 결합) 2000자를 넘기는(실측 2345자)
+# 케이스를 만들어 clip(1800) 이 실제로 잘라야 함을 확인한다.
+DESC12="add_a_very_long_and_descriptive_migration_name_that_is_realistic_for_typescript_migration_files_in_this_service_repository_layer_and_needs_to_be_quite_long_for_the_clip_backstop_test_to_actually_trigger"
+clipbig="$(jq --arg desc "$DESC12" \
+  '.changes.migrations = [range(12) | "Migration202501011200" + (.*7|tostring) + "_" + $desc + "_idx" + (.|tostring) + ".ts"]' \
+  "$ROOT/tests/fixtures/context_prod.json" | jq -f "$J")"
+assert_json_eq "12건의 realistic 마이그레이션 파일명에서도 모든 필드가 2000자 이하 (clip(1800) 백스톱)" \
+  "$(printf '%s' "$clipbig" | jq '[.attachments[0].blocks[] | .fields? // empty | .[] | .text | length] | max | . <= 2000')" 'true'
+
 # mention 키가 아예 없어도 군더더기 공백이 붙지 않는다.
 nom="$(jq 'del(.mention)' "$ROOT/tests/fixtures/context_prod.json" | jq -f "$J")"
 assert_json_eq "mention 키 부재 시 선행 공백 없음" \
@@ -109,6 +123,16 @@ assert_json_eq "빈 argocd_url 에서 깨진 mrkdwn 링크가 생기지 않는�
   "$(printf '%s' "$noargo" | jq '[.. | strings | select(test("<\\|ArgoCD>|https:///"))] | length')" '0'
 assert_json_eq "Actions 링크는 그대로 유지된다" \
   "$(printf '%s' "$noargo" | jq '[.. | strings | select(test("\\|Actions>"))] | length | . > 0')" 'true'
+
+# --- 빈 image_tag 는 빈 코드스팬이 아니라 '-' 로 (I1) ---
+# README:50/spec §4.1 예시의 needs: [prepare, argocd-sync] 가 빠지면 image_tag
+# 가 빈 문자열로 도착한다. 그때 릴리즈를 특정 ECR 아티팩트에 묶는 유일한
+# 필드가 빈 코드스팬(````)으로 나가는 것을 막는다.
+noimg="$(jq '.image_tag = ""' "$ROOT/tests/fixtures/context_prod.json" | jq -f "$J")"
+assert_json_eq "빈 image_tag 는 '-' 로 렌더된다" \
+  "$(printf '%s' "$noimg" | jq '[.attachments[0].blocks[] | select(.type=="context") | .elements[] | .text? // empty | select(test("배포"))] | .[0] | test("`-`")')" 'true'
+assert_json_eq "빈 image_tag 에서 빈 코드스팬이 남지 않는다" \
+  "$(printf '%s' "$noimg" | jq '[.. | strings | select(test("``"))] | length')" '0'
 
 # 골든 회귀
 assert_json_eq "prod 골든" "$out" "$(cat "$ROOT/tests/golden/payload_prod.json")"

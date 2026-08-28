@@ -11,9 +11,11 @@ git -C "$d" tag deployed/prod HEAD~2
 out="$(cd "$d" && bash "$S" prod 2>/dev/null)"
 assert_json_eq "태그 있음 → 커밋 2개 범위" \
   "$(printf '%s' "$out" | jq '.commits')" '2'
-assert_json_eq "base가 태그 커밋" \
+assert_json_eq "base가 태그 커밋 (짧은 sha, 스펙 §3.3 목업 형식)" \
   "$(printf '%s' "$out" | jq -r '.base' | jq -R .)" \
-  "$(git -C "$d" rev-parse HEAD~2 | jq -R .)"
+  "$(git -C "$d" rev-parse --short HEAD~2 | jq -R .)"
+assert_json_eq "base 는 40자 전체 sha 가 아니라 짧은 sha 다" \
+  "$(printf '%s' "$out" | jq -r '.base | length | . < 40')" 'true'
 
 # 3) 상한 초과 시 truncated
 out="$(cd "$d" && MAX_COMMITS=1 bash "$S" prod 2>/dev/null)"
