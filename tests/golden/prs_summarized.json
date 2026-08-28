@@ -1,0 +1,38 @@
+[
+  {
+    "number": 94,
+    "title": "이탈 히스토리 SPEC-CP-002 구현",
+    "summary": "[[Jira](https://willog.atlassian.net/browse/CP-2)] 이탈 히스토리 기록 API 신설",
+    "author": "barry",
+    "labels": ["feature"],
+    "url": "https://github.com/o/r/pull/94",
+    "image_count": 2
+  },
+  {
+    "number": 95,
+    "title": "fix(engine): 지오펜스 판정 NPE \"경계\" 수정 \\ 백슬래시",
+    "summary": "지오펜스 판정 NPE \"경계\" 수정 \\ 백슬래시",
+    "author": "barry",
+    "labels": ["fix"],
+    "url": "https://github.com/o/r/pull/95",
+    "image_count": 0
+  },
+  {
+    "number": 96,
+    "title": "chore: 의존성 정리",
+    "summary": "의존성 정리",
+    "author": "someone",
+    "labels": [],
+    "url": "https://github.com/o/r/pull/96",
+    "image_count": 0
+  },
+  {
+    "number": 97,
+    "title": "feat!: 콜백 계약 변경",
+    "summary": "콜백 계약 변경",
+    "author": "barry",
+    "labels": ["breaking"],
+    "url": "https://github.com/o/r/pull/97",
+    "image_count": 0
+  }
+]

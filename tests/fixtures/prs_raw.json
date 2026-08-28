@@ -1,0 +1,34 @@
+[
+  {
+    "number": 94,
+    "title": "이탈 히스토리 SPEC-CP-002 구현",
+    "url": "https://github.com/o/r/pull/94",
+    "author": { "login": "barry" },
+    "labels": [ { "name": "feature" } ],
+    "body": "# 🙏 PR 리뷰 요청드립니다\n\n## Summary\n<!-- 요약을 적습니다 -->\n- [[Jira](https://willog.atlassian.net/browse/CP-2)] 이탈 히스토리 기록 API 신설\n\n## 📚 Reference\n- [Figma]()\n\n## 📄 Changes\n| BEFORE | AFTER |\n| --- | --- |\n| ![before](https://github.com/user-attachments/assets/aaa) | ![after](https://github.com/user-attachments/assets/bbb) |\n"
+  },
+  {
+    "number": 95,
+    "title": "fix(engine): 지오펜스 판정 NPE \"경계\" 수정 \\ 백슬래시",
+    "url": "https://github.com/o/r/pull/95",
+    "author": { "login": "barry" },
+    "labels": [ { "name": "fix" } ],
+    "body": "템플릿 없는 PR. 그냥 본문만 있다."
+  },
+  {
+    "number": 96,
+    "title": "chore: 의존성 정리",
+    "url": "https://github.com/o/r/pull/96",
+    "author": { "login": "someone" },
+    "labels": [],
+    "body": null
+  },
+  {
+    "number": 97,
+    "title": "feat!: 콜백 계약 변경",
+    "url": "https://github.com/o/r/pull/97",
+    "author": { "login": "barry" },
+    "labels": [ { "name": "breaking" } ],
+    "body": "## Summary\n<!-- 전부 주석뿐 -->\n\n## 📚 Reference\n"
+  }
+]
