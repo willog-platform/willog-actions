@@ -6,7 +6,7 @@ set -euo pipefail
 
 ENVIRONMENT="$(require environment "${1-}")"
 HEAD_SHA="${2:-$(git rev-parse HEAD)}"
-MAX_COMMITS="${MAX_COMMITS:-100}"
+MAX_COMMITS="$(int_or_default MAX_COMMITS "${MAX_COMMITS:-}" 100)"
 
 TAG="deployed/${ENVIRONMENT}"
 BASE="$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}" || true)"
