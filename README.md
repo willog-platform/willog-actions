@@ -26,13 +26,21 @@
 각 서비스 repo의 `.github/workflows/deploy.yaml` 에서 기존 `notify-start` /
 `notify-result` job을 아래로 대체한다.
 
-```yaml
-permissions:
-  id-token: write
-  contents: write        # deployed/{env} 태그 push용. 현행 read 에서 올려야 한다.
+호출 측 repo의 `permissions` 는 **끌어올리지 않는다.** 워크플로 최상위에서
+`contents: write` 를 열면 `build-and-push`(서드파티 빌드 툴 실행)·`create-manifest`·
+`argocd-sync` 까지 쓰기 가능한 토큰을 받는데, 이 job들은 그 권한을 쓰지 않는다.
+재사용 워크플로 호출은 **호출하는 job 레벨**에서 `permissions:` 를 선언할 수
+있으므로, 아래처럼 알림을 보내는 두 job에만 준다. 이렇게 하면 피해 범위가
+그 두 job으로 좁아지고, "알림 job은 배포를 막지 않는다"는 경계(위 설계 원칙)가
+호출 측 파일만 봐도 보인다 — 최상위에 있으면 그 경계가 다른 job들과 뒤섞여
+안 보인다.
 
+```yaml
 jobs:
   notify-start:
+    permissions:
+      contents: write
+      id-token: write
     uses: willog-platform/willog-actions/.github/workflows/deploy-notify.yml@v1
     with:
       phase: start
@@ -47,7 +55,10 @@ jobs:
       ARGOCD_SERVER_PROD:       ${{ secrets.ARGOCD_SERVER_PROD }}
 
   notify-result:
-    needs: argocd-sync
+    permissions:
+      contents: write
+      id-token: write
+    needs: [prepare, argocd-sync]
     if: always()
     uses: willog-platform/willog-actions/.github/workflows/deploy-notify.yml@v1
     with:
@@ -140,13 +151,30 @@ secrets
 
 ### 선행 작업
 
+0. **이 repo(`willog-actions`)의 가시성 결정이 먼저다.** `Checkout willog-actions`
+   스텝(`deploy-notify.yml`)에는 `token:` 이 없어 **호출 측 repo 에 스코프된
+   `github.token`** 을 쓴다. 이 토큰은 `willog-actions` 가 **private** 이면
+   그 repo를 읽지 못한다. 아래 §5.3의 Access 설정은 reusable workflow *호출*
+   권한만 다루고 `actions/checkout` 권한과는 별개다. 셋 중 하나를 택한다:
+   - `willog-actions` 를 **public** 으로 둔다 (가장 단순), 또는
+   - 스크립트를 `actions/checkout` 대신 **composite action** 으로 소비한다
+     (private repo의 *action* 참조는 위 Access 설정으로 커버된다), 또는
+   - `contents: read` 권한이 있는 토큰을 별도로 발급해 넘긴다.
+
+   고르지 않고 넘어가면, `willog-actions` 가 private일 경우 **첫 dev 배포부터
+   알림이 0통** 나가고 `Repository not found` 에러가 남는다 — 경로 오타처럼
+   보이지만 원인은 가시성이다. 이 결정은 보류 중이며 사람이 확정해야 한다.
 1. **이 repo의 Settings → Actions → General → Access** 를
    `Accessible from repositories in the willog-platform organization` 으로 설정.
    빠뜨리면 호출 측이 `workflow was not found` 로 실패하는데, 메시지가 경로
-   오타로 오독된다.
+   오타로 오독된다. **확인 방법:** 서비스 repo 하나에서 `@v1` 대신
+   `@<현재 sha>` 로 고정한 dev 배포를 1회 디스패치하고, 그 잡 로그에
+   `workflow was not found` 가 나오지 않는지 확인한다.
 2. **릴리즈 전용 Slack 채널을 만들고 알림 봇을 초대**한 뒤 채널 ID를 확보해
-   `release_channel_id` 에 넣는다. 봇 초대를 빠뜨리면 `not_in_channel` 로
-   실패한다. 이 단계를 건너뛰면 릴리즈 노트가 **조용히 dev 채널로** 간다.
+   `release_channel_id` 에 넣는다. 초대할 앱은 조직에서 기존 배포 알림을
+   보내던 그 Slack 앱(봇)이며, `chat:write` 스코프가 있어야 한다. 봇 초대를
+   빠뜨리면 `not_in_channel` 로 **첫 릴리즈 노트부터** 실패한다. 이 단계를
+   건너뛰면 릴리즈 노트가 **조용히 dev 채널로** 간다.
 3. `bash scripts/bootstrap-labels.sh willog-platform/<repo>` 로 라벨 생성.
    `breaking`/`feature`/`fix` 는 semver 증가를 결정한다 — **없으면 모든 릴리즈가
    patch 증가가 되어 버전이 무의미해진다.** 재실행해도 안전하다(`--force`).
@@ -155,4 +183,9 @@ secrets
 4. `templates/pull_request_template.md` 를 각 repo `.github/` 에 복사.
    템플릿이 없으면 요약이 PR 제목 폴백으로만 동작한다(정상 동작이지만
    비개발 독자에게 전달되는 정보가 줄어든다).
-5. 호출 repo의 `permissions` 를 `contents: write` 로 승격.
+5. 호출 repo의 `notify-start`/`notify-result` 두 job에 위 "사용법" 예시와 같이
+   `permissions:` (`contents: write`, `id-token: write`) 를 **job 레벨로** 추가한다.
+   워크플로 최상위 `permissions` 는 올리지 않는다 — 두 알림 job이 이제 자기
+   권한을 완전히 선언하므로, 호출 측 파일에 이미 있는 repo 고유
+   `permissions` 항목(예: 다른 job이 쓰는 별도 스코프)을 최상위에서 병합하다가
+   지우는 실수를 겪지 않는다.
