@@ -45,7 +45,9 @@ def footer:
       { type: "section", text: md(
           headline + "  *[ <" + repo_url + "|" + (.service_name | esc) + "> ]  " +
           "<" + repo_url + "/actions/runs/" + .run_id + "|Actions>" +
-          "  ·  <" + .argocd_url + "|ArgoCD>*") },
+          # 빈 argocd_url 은 링크 없는 평문으로 (render-main.jq 와 동일 규칙).
+          (if ((.argocd_url // "") == "") then "  ·  ArgoCD(링크 없음)"
+           else "  ·  <" + .argocd_url + "|ArgoCD>" end) + "*") },
       { type: "divider" },
       { type: "section", fields: [
           md("*🌐  환경*\n`" + (.environment | esc) + "`"),

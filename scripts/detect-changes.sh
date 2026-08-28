@@ -87,5 +87,7 @@ ${EXC_SPEC}"
   fi
 fi
 
-jq -n --argjson m "$MIGRATIONS" --argjson a "$API_FILES" \
+# `-c` 로 한 줄 출력. 셸 변수와 `$GITHUB_OUTPUT` 을 오가는 값은 항상
+# 한 줄이어야 안전하다 (형제 스크립트들과 동일 규칙).
+jq -n -c --argjson m "$MIGRATIONS" --argjson a "$API_FILES" \
   '{migrations:$m, api_touched:(($a|length) > 0), api_files:$a}'

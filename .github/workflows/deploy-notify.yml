@@ -1,0 +1,199 @@
+name: Deploy Notify
+
+on:
+  workflow_call:
+    inputs:
+      phase:             { type: string, required: true }   # start | result
+      service_name:      { type: string, required: true }
+      environment:       { type: string, required: true }   # dev | stage | prod
+      apps:              { type: string, required: false, default: "" }
+      image_tag:         { type: string, required: false, default: "" }
+      deploy_status:     { type: string, required: false, default: "" }
+      version_bump:      { type: string, required: false, default: "auto" }
+      # 릴리즈 경로에서는 필수지만 선언상 optional 이다. `phase: start` 호출은
+      # glob 을 넘기지 않으므로 required: true 로 두면 시작 알림이 전부 깨진다.
+      # 릴리즈 경로의 런타임 가드가 빈 값을 거부한다 (스펙 §4.3).
+      migration_glob:    { type: string, required: false, default: "" }
+      api_path_glob:     { type: string, required: false, default: "" }
+      api_exclude_glob:  { type: string, required: false, default: "**/*.spec.ts,**/*Test.kt,**/test/**" }
+      dev_channel_id:    { type: string, required: true }
+      release_channel_id: { type: string, required: false, default: "" }
+      max_commits:       { type: string, required: false, default: "100" }
+    secrets:
+      SLACK_NOTIFICATION_TOKEN: { required: true }
+      ARGOCD_SERVER_DEV:        { required: false }
+      ARGOCD_SERVER_STAGE:      { required: false }
+      ARGOCD_SERVER_PROD:       { required: false }
+    outputs:
+      thread_ts:
+        description: "참고용. Slack 메시지 ts"
+        value: ${{ jobs.notify.outputs.thread_ts }}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    outputs:
+      # 스레드 ts 는 릴리즈 노트 경로에서만 생긴다. 간소 경로는 스레드를 만들지
+      # 않으므로 여기서는 빈 값이고, Task 10 이 `send` 스텝을 추가하면서
+      # `${{ steps.send.outputs.thread_ts }}` 로 바꾼다.
+      thread_ts: ''
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0        # 커밋 범위 계산에 전체 이력 필요
+          fetch-tags: true      # deployed/{env} 와 v* 태그 필요
+
+      - name: Checkout willog-actions
+        uses: actions/checkout@v6
+        with:
+          repository: willog-platform/willog-actions
+          # 재사용 워크플로 자신의 커밋 sha. `github.workflow_sha` 는 최상위
+          # (호출자) 워크플로를 가리키므로 여기서는 틀린다. 이 값을 써야
+          # 호출 측의 @v1 / @<sha> 핀과 스크립트 버전이 일치한다.
+          ref: ${{ github.job_workflow_sha }}
+          path: .willog-actions
+
+      - name: Resolve ArgoCD URL
+        id: argo
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          SERVICE: ${{ inputs.service_name }}
+          SRV_DEV: ${{ secrets.ARGOCD_SERVER_DEV }}
+          SRV_STAGE: ${{ secrets.ARGOCD_SERVER_STAGE }}
+          SRV_PROD: ${{ secrets.ARGOCD_SERVER_PROD }}
+        run: |
+          set -euo pipefail
+          case "$ENVIRONMENT" in
+            dev)   HOST="$SRV_DEV" ;;
+            stage) HOST="$SRV_STAGE" ;;
+            prod)  HOST="$SRV_PROD" ;;
+            *)     HOST="" ;;
+          esac
+          # HOST 가 비면 링크를 만들지 않는다. 예전 코드는 조건 없이
+          # `https:///applications/...` (호스트 없는 URL) 를 내보냈고, 그것이
+          # 그대로 Slack 메시지의 `<url|ArgoCD>` 에 들어가 **끊긴 링크가
+          # 이유 없이 노출**됐다. 시크릿 누락이나 environment 오타 때
+          # 조용히 망가지는 대신 빈 값을 내보내고 경고를 남긴다.
+          # 렌더러는 빈 argocd_url 을 링크 없는 평문으로 처리한다.
+          if [ -z "$HOST" ]; then
+            # 로그 라인에 넣기 전에 개행·CR 을 지운다. Actions 러너는 stdout 을
+            # **줄 단위로** 훑어 `::command::` 를 해석하므로, 값에 개행이 있으면
+            # 가짜 `::error::`·`::add-mask::` 같은 워크플로 커맨드를 로그에
+            # 주입할 수 있다. 셸 인젝션과는 별개 부류다.
+            ENV_SAFE="$(printf '%s' "$ENVIRONMENT" | tr -d '\n\r')"
+            echo "::warning::ARGOCD_SERVER 시크릿이 없거나 environment 가 예상 밖입니다 (환경='${ENV_SAFE}') — ArgoCD 링크를 생략합니다"
+            echo "url=" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=https://${HOST}/applications/argocd/${SERVICE}-${ENVIRONMENT}?view=tree&resource=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve commit range
+        id: range
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          MAX_COMMITS: ${{ inputs.max_commits }}
+        run: |
+          set -euo pipefail
+          # resolve-base.sh 자신의 `jq -n` 은 compact(-c)가 아니라 여러 줄로 예쁘게
+          # 출력한다. 그대로 `echo "json=${RANGE}"` 로 쓰면 여러 줄 값이 되어
+          # GITHUB_OUTPUT 의 줄 단위 파서를 깨뜨린다(제약 #2와 동일한 위험 클래스).
+          # stdout만 `jq -c` 로 압축한다 — stderr(::notice::/::warning::)는 파이프를
+          # 타지 않으므로 그대로 잡 로그에 남는다.
+          RANGE="$(bash .willog-actions/scripts/resolve-base.sh "$ENVIRONMENT" | jq -c '.')"
+          echo "json=${RANGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Choose channel
+        id: channel
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          PHASE: ${{ inputs.phase }}
+          STATUS: ${{ inputs.deploy_status }}
+          DEV_CH: ${{ inputs.dev_channel_id }}
+          REL_CH: ${{ inputs.release_channel_id }}
+        run: |
+          set -euo pipefail
+          # 릴리즈 노트 형식을 쓰는 경우에만 릴리즈 채널로 보낸다.
+          RELEASE=false
+          if [ "$PHASE" = "result" ] && [ "$STATUS" = "success" ] \
+             && { [ "$ENVIRONMENT" = "stage" ] || [ "$ENVIRONMENT" = "prod" ]; }; then
+            RELEASE=true
+          fi
+          CH="$DEV_CH"
+          if [ "$RELEASE" = true ]; then
+            if [ -n "$REL_CH" ]; then
+              CH="$REL_CH"
+            else
+              # 형식은 릴리즈 노트 그대로이고 채널만 dev 로 폴백한다
+              # (스펙 §4.3). 알림을 잃는 것보다 낫지만, 조용히 넘기지 않는다 —
+              # 설정을 빠뜨린 사람이 로그에서 알아볼 수 있어야 한다.
+              echo "::warning::release_channel_id 가 지정되지 않았습니다 — 릴리즈 노트를 dev 채널로 보냅니다"
+            fi
+          fi
+          echo "release=${RELEASE}" >> "$GITHUB_OUTPUT"
+          echo "id=${CH}"          >> "$GITHUB_OUTPUT"
+
+      - name: Build simple context
+        id: simple_ctx
+        if: ${{ steps.channel.outputs.release != 'true' }}
+        env:
+          # ── Actions 스크립트 인젝션 방어 ────────────────────────────
+          # `${{ }}` 표현식을 `run:` 스크립트 **본문**에 직접 보간하지 않는다.
+          # Actions 는 셸이 실행되기 **전에** 텍스트로 치환하므로,
+          # `--arg x '${{ inputs.y }}'` 에서 값에 작은따옴표가 들어가면 인용을
+          # 탈출해 임의 명령이 실행된다. 전량 env 로 넘기고 `"$VAR"` 로만 읽는다.
+          # (env 값은 프로세스 환경으로 전달되므로 셸 파싱을 거치지 않는다.)
+          SERVICE_NAME: ${{ inputs.service_name }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+          DEPLOY_STATUS: ${{ inputs.deploy_status }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          APPS: ${{ inputs.apps }}
+          ARGOCD_URL: ${{ steps.argo.outputs.url }}
+          CHANNEL: ${{ steps.channel.outputs.id }}
+          RANGE_JSON: ${{ steps.range.outputs.json }}
+        run: |
+          set -euo pipefail
+          case "$ENVIRONMENT" in
+            dev) LABEL=Development ;; stage) LABEL=Staging ;; prod) LABEL=Production ;;
+            *) LABEL="$ENVIRONMENT" ;;
+          esac
+          # `-c` 가 필수다. jq 의 기본 출력은 여러 줄이고, 여러 줄 값을
+          # GITHUB_OUTPUT 에 `name=value` 로 쓰면 줄 단위 파서가 깨져
+          # **임의의 output 을 주입**할 수 있다.
+          CTX="$(jq -n -c \
+            --arg service_name  "$SERVICE_NAME" \
+            --arg environment   "$ENVIRONMENT" \
+            --arg env_label     "$LABEL" \
+            --arg repo          "$REPO" \
+            --arg run_id        "$RUN_ID" \
+            --arg actor         "$ACTOR" \
+            --arg deploy_status "$DEPLOY_STATUS" \
+            --arg image_tag     "$IMAGE_TAG" \
+            --arg apps          "$APPS" \
+            --arg argocd_url    "$ARGOCD_URL" \
+            --arg channel       "$CHANNEL" \
+            --argjson range     "$RANGE_JSON" \
+            '{service_name:$service_name, environment:$environment, env_label:$env_label,
+              repo:$repo, run_id:$run_id, actor:$actor, deploy_status:$deploy_status,
+              image_tag:$image_tag, apps:$apps, argocd_url:$argocd_url, channel:$channel,
+              range:$range}')"
+          printf 'json=%s\n' "$CTX" >> "$GITHUB_OUTPUT"
+
+      - name: Send simple notification
+        if: ${{ steps.channel.outputs.release != 'true' }}
+        env:
+          TOKEN: ${{ secrets.SLACK_NOTIFICATION_TOKEN }}
+          CTX: ${{ steps.simple_ctx.outputs.json }}
+          PHASE: ${{ inputs.phase }}
+        run: |
+          set -euo pipefail
+          PAYLOAD="$(printf '%s' "$CTX" | jq -f .willog-actions/scripts/render-simple.jq --arg phase "$PHASE")"
+          RESP="$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data-binary "$PAYLOAD")"
+          printf '%s' "$RESP" | jq -e '.ok' >/dev/null \
+            || { printf '::error::Slack 전송 실패: %s\n' "$(printf '%s' "$RESP" | jq -r '.error // "unknown"')"; exit 1; }

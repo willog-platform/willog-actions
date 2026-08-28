@@ -68,5 +68,12 @@ assert_json_eq "api_files 키 부재에도 스레드가 유효" \
 assert_json_eq "image_tag 키 부재에도 간소 형식이 유효" \
   "$(jq 'del(.image_tag)' "$CTX" | jq -f "$SJ" --arg phase start | jq 'has("channel")')" 'true'
 
+# 간소 형식도 빈 argocd_url 에서 끊긴 링크를 만들지 않는다 (render-main 과 동일 규칙).
+noargo2="$(jq '.argocd_url = ""' "$CTX" | jq -f "$SJ" --arg phase start)"
+assert_json_eq "간소 형식의 빈 argocd_url 은 평문으로" \
+  "$(printf '%s' "$noargo2" | jq '[.. | strings | select(test("ArgoCD\\(링크 없음\\)"))] | length | . > 0')" 'true'
+assert_json_eq "간소 형식에 깨진 링크가 생기지 않는다" \
+  "$(printf '%s' "$noargo2" | jq '[.. | strings | select(test("<\\|ArgoCD>|https:///"))] | length')" '0'
+
 assert_json_eq "thread 골든" "$th" "$(cat "$ROOT/tests/golden/payload_thread.json")"
 assert_json_eq "simple start 골든" "$st" "$(cat "$ROOT/tests/golden/payload_simple_start.json")"

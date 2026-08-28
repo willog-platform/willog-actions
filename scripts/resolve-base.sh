@@ -26,7 +26,10 @@ if [ "$TOTAL" -gt "$MAX_COMMITS" ]; then
   warn "커밋 ${TOTAL}개가 상한 ${MAX_COMMITS}을 초과 — PR 목록이 절단된다"
 fi
 
-jq -n \
+# `-c` 필수: 이 출력은 워크플로에서 `$GITHUB_OUTPUT` 에 `name=value` 로
+# 기록된다. jq 의 기본 출력은 여러 줄이고, 여러 줄 값은 GitHub 의 줄 단위
+# 파서를 깨뜨려 **임의의 output 주입**을 허용한다.
+jq -n -c \
   --arg base "$BASE" --arg head "$HEAD_SHA" \
   --argjson commits "$TOTAL" --argjson truncated "$TRUNCATED" \
   '{base:$base, head:$head, commits:$commits, truncated:$truncated}'

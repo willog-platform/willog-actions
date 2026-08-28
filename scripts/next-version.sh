@@ -46,7 +46,7 @@ PREV="$(git tag --list 'v[0-9]*' --merged HEAD --sort=-v:refname 2>/dev/null \
 
 if [ -z "$PREV" ]; then
   note "v* 태그 없음 — 첫 릴리즈로 v1.0.0 을 낸다"
-  jq -n '{previous:null, next:"v1.0.0", bump:"initial"}'
+  jq -n -c '{previous:null, next:"v1.0.0", bump:"initial"}'
   exit 0
 fi
 
@@ -101,5 +101,6 @@ case "$BUMP" in
   patch) PATCH=$((PATCH + 1)) ;;
 esac
 
-jq -n --arg prev "$PREV" --arg next "v${MAJOR}.${MINOR}.${PATCH}" --arg bump "$BUMP" \
+# `-c` 로 한 줄 출력 (형제 스크립트들과 동일 규칙).
+jq -n -c --arg prev "$PREV" --arg next "v${MAJOR}.${MINOR}.${PATCH}" --arg bump "$BUMP" \
   '{previous:$prev, next:$next, bump:$bump}'

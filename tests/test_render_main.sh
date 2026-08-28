@@ -99,6 +99,17 @@ nom="$(jq 'del(.mention)' "$ROOT/tests/fixtures/context_prod.json" | jq -f "$J")
 assert_json_eq "mention 키 부재 시 선행 공백 없음" \
   "$(printf '%s' "$nom" | jq '.attachments[0].blocks[0].text.text | test("^🚀")')" 'true'
 
+# --- 빈 argocd_url 은 끊긴 링크를 만들지 않는다 ---
+# 예전 워크플로는 시크릿 누락 시 `https:///applications/...` 를 내보냈고
+# 그것이 그대로 Slack 에 끊긴 링크로 노출됐다.
+noargo="$(jq '.argocd_url = ""' "$ROOT/tests/fixtures/context_prod.json" | jq -f "$J")"
+assert_json_eq "빈 argocd_url 은 링크 없는 평문으로" \
+  "$(printf '%s' "$noargo" | jq '[.attachments[0].blocks[] | .fields? // [] | .[] | .text | select(test("링크"))] | .[0] | test("ArgoCD\\(링크 없음\\)")')" 'true'
+assert_json_eq "빈 argocd_url 에서 깨진 mrkdwn 링크가 생기지 않는다" \
+  "$(printf '%s' "$noargo" | jq '[.. | strings | select(test("<\\|ArgoCD>|https:///"))] | length')" '0'
+assert_json_eq "Actions 링크는 그대로 유지된다" \
+  "$(printf '%s' "$noargo" | jq '[.. | strings | select(test("\\|Actions>"))] | length | . > 0')" 'true'
+
 # 골든 회귀
 assert_json_eq "prod 골든" "$out" "$(cat "$ROOT/tests/golden/payload_prod.json")"
 assert_json_eq "minimal 골든" "$min" "$(cat "$ROOT/tests/golden/payload_minimal.json")"

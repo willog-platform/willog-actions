@@ -84,7 +84,10 @@ def migration_field:
 
 def links_field:
   "<" + repo_url + "/actions/runs/" + .run_id + "|Actions>" +
-  " · <" + .argocd_url + "|ArgoCD>" +
+  # argocd_url 이 비면 링크를 만들지 않는다. `<|ArgoCD>` 는 깨진 mrkdwn 이고
+  # `https:///...` 는 끊긴 링크다 — 둘 다 이유 없이 노출되면 안 된다.
+  (if ((.argocd_url // "") == "") then " · ArgoCD(링크 없음)"
+   else " · <" + .argocd_url + "|ArgoCD>" end) +
   (if .environment == "prod"
    then " · <" + repo_url + "/releases/tag/" + .version.next + "|Release>"
    else "" end);
