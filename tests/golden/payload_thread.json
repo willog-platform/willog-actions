@@ -1,0 +1,5 @@
+{
+  "channel": "C0RELEASE",
+  "text": "*PR 상세*\n<https://github.com/o/r/pull/95|#95>  fix: NPE \"경계\" 수정  ·  @barry  ·  [fix]\n<https://github.com/o/r/pull/94|#94>  이탈 히스토리 구현  ·  @barry  ·  [feature]\n\n*마이그레이션*  V33__excursion_history.sql, V34__auto_arrival.sql\n*API 표면*  WatchAdminController.kt\n*커밋 범위*  `a1b2c3d..6185be5`  (12 commits)\n*이미지 태그*  `6185be5-20260828045318`",
+  "thread_ts": "1724800000.000100"
+}

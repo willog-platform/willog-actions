@@ -1,0 +1,57 @@
+{
+  "attachments": [
+    {
+      "blocks": [
+        {
+          "text": {
+            "text": "🚀  배포 시작  *[ <https://github.com/willog-platform/willog-rule-engine|rule-engine> ]  <https://github.com/willog-platform/willog-rule-engine/actions/runs/1234567|Actions>  ·  <https://argocd.example/applications/argocd/rule-engine-prod|ArgoCD>*",
+            "type": "mrkdwn"
+          },
+          "type": "section"
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "fields": [
+            {
+              "text": "*🌐  환경*\n`prod`",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*🎯  apps*\n`api,nginx`",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*📦  이미지*\n`6185be5-20260828045318`",
+              "type": "mrkdwn"
+            },
+            {
+              "text": "*🔀  범위*\n`a1b2c3d..6185be5`",
+              "type": "mrkdwn"
+            }
+          ],
+          "type": "section"
+        },
+        {
+          "elements": [
+            {
+              "alt_text": "barry",
+              "image_url": "https://github.com/barry.png",
+              "type": "image"
+            },
+            {
+              "text": "*barry* 님이 배포를 시작했습니다",
+              "type": "mrkdwn"
+            }
+          ],
+          "type": "context"
+        }
+      ],
+      "color": "#1e90ff",
+      "fallback": "🚀  배포 시작 [rule-engine] Production"
+    }
+  ],
+  "channel": "C0RELEASE",
+  "text": "🚀  배포 시작 [rule-engine] Production"
+}
