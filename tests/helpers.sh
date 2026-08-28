@@ -4,7 +4,14 @@ FAILURES=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 _pass() { printf '  ok   %s\n' "$1"; }
-_fail() { printf '  FAIL %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+_fail() {
+  printf '  FAIL %s\n' "$1"
+  FAILURES=$((FAILURES + 1))
+  # 실패를 프로세스 밖 파일에도 기록한다. 테스트 파일이 나중에 exit 를
+  # 호출하더라도 run.sh 가 실패를 놓치지 않게 하는 유일한 방법이다.
+  if [ -n "${SDD_FAIL_LOG:-}" ]; then printf '%s\n' "$1" >> "$SDD_FAIL_LOG"; fi
+  return 0
+}
 
 # assert_json_eq <설명> <실제JSON> <기대JSON>
 assert_json_eq() {
@@ -19,9 +26,11 @@ assert_json_eq() {
 }
 
 # assert_fail <설명> <명령...> — 0이 아닌 종료코드를 기대한다.
+# 서브셸로 감싼다. lib.sh 의 die/require 처럼 exit 를 호출하는 셸 함수를
+# 테스트해도 이 프로세스가 죽지 않는다.
 assert_fail() {
   local desc="$1"; shift
-  if "$@" >/dev/null 2>&1; then _fail "$desc (성공해버렸음)"; else _pass "$desc"; fi
+  if ( "$@" ) >/dev/null 2>&1; then _fail "$desc (성공해버렸음)"; else _pass "$desc"; fi
 }
 
 # make_repo — 커밋 3개가 있는 임시 git repo를 만들고 경로를 stdout으로.
