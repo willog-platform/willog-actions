@@ -26,6 +26,37 @@ case "$OVERRIDE" in
   *) die "version_bump 값이 잘못됨: ${OVERRIDE} (auto|patch|minor|major)" ;;
 esac
 
+# 후보 태그 필터. 이 시스템이 스스로 만드는 형태(`v{major}[.{minor}[.{patch}]]`)만
+# 인정한다. 아래 두 군데(HEAD 정확일치·조상 최대값)가 같은 규칙을 써야 한다 —
+# 한쪽만 느슨하면 `v1.2.3-rc1` 이 붙은 커밋이 "이미 태깅됨"으로 통과하면서
+# 다음 버전 계산에서는 무시되어, 같은 커밋이 rc 번호로 공지되고 정식 번호는
+# 따로 소비된다.
+ours() { grep -E '^v[0-9]+(\.[0-9]+){0,2}$'; }
+
+# ── 버전은 환경이 아니라 **커밋의 속성**이다 ──────────────────────────────
+# 배포 대상 커밋에 이미 우리 형식의 태그가 붙어 있으면 그것이 이 아티팩트의
+# 버전이다. 새로 계산하지 않는다. 이 분기가 없으면 dev·stage·prod 가 각자
+# 자기 시점에서 "다음 번호"를 예측해 공지하고(실제로는 아무 태그도 안 생기고),
+# 같은 커밋의 재배포마다 번호가 하나씩 올라간다 — 세 채널이 서로 다른,
+# 존재하지 않는 번호를 말하게 된다.
+# 따라서 규칙은 하나다: **붙어 있으면 그것을 쓰고, 없으면 지금 만든다.**
+# 첫 배포 환경(보통 dev)이 자연히 태깅 주체가 되고 뒤따르는 환경은 역조회만 한다.
+# 정렬은 `git ... --sort=-v:refname` 로 한다(`sort -V` 는 플랫폼차가 있다).
+# git 의 versionsort 가 rc 를 정식보다 크게 두는 결함은 `ours` 가 rc 를
+# 이미 걸러 무해하다. 한 커밋에 우리 형식 태그가 둘 이상 붙는 것은 이상
+# 상황이므로 가장 높은 것을 쓰고 남긴다.
+EXISTING="$(git tag --points-at HEAD --sort=-v:refname 2>/dev/null | ours | head -1 || true)"
+if [ -n "$EXISTING" ]; then
+  # override 를 넘겼어도 무시된다. 이미 번호가 매겨진 아티팩트의 번호를
+  # 뒤에서 바꿀 수는 없다 — 조용히 넘기지 않고 남긴다.
+  if [ "$OVERRIDE" != "auto" ]; then
+    warn "version_bump=${OVERRIDE} 는 무시된다 — 이 커밋은 이미 ${EXISTING} 로 태깅되어 있다"
+  fi
+  note "이 커밋에 이미 ${EXISTING} 태그가 있다 — 그 버전을 그대로 쓴다(새 태그 없음)"
+  jq -n -c --arg v "$EXISTING" '{previous:null, next:$v, bump:"existing"}'
+  exit 0
+fi
+
 # 태그 선택에 두 가지 필터가 반드시 필요하다.
 # ① `--merged HEAD` — 도달 불가한 태그를 배제한다. `git tag --list` 는 기본적으로
 #    reachability 를 보지 않으므로, 버려진 브랜치에 달린 `v9.9.9` 하나가 이후
@@ -41,7 +72,7 @@ esac
 #    프로덕션 버전 계산의 기반은 이 시스템이 만든 태그로 한정하는 것이
 #    유일하게 건전하다. 사람이 다른 기준을 원하면 정식 형태의 태그를 만든다.
 PREV="$(git tag --list 'v[0-9]*' --merged HEAD --sort=-v:refname 2>/dev/null \
-        | grep -E '^v[0-9]+(\.[0-9]+){0,2}$' \
+        | ours \
         | head -1 || true)"
 
 if [ -z "$PREV" ]; then

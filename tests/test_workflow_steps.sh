@@ -555,47 +555,129 @@ assert_json_eq "간소 경로 + 전송 미확인 → 마커 이동 안 함" \
 assert_json_eq "간소 경로 + 전송 확인 → 마커 이동" \
   "$(marker_case false '' true | jq -R .)" '"true"'
 
-# --- Create version tag and release : 기존 태그면 warn+skip, 중복 Release 없음 ---
-release_case() {
-  local pretag="$1" ghlog wk body out
-  ghlog="$(mktemp)"; wk="$(mktemp -d)"
-  local ghdir; ghdir="$(mktemp -d)"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$ghlog" > "$ghdir/gh"
-  chmod +x "$ghdir/gh"
+# --- Create version tag : 태그는 환경 무관하게 배포 커밋에 붙는다 ---
+# 작업 repo + origin + 가짜 gh 를 갖춘 판을 만든다. 스텝 본문을 그대로 실행한다.
+tagbed() {
+  local wk; wk="$(mktemp -d)"
   git init -q --bare "$wk/o.git"; git init -q -b main "$wk/w"
   git -C "$wk/w" config user.email t@t.io; git -C "$wk/w" config user.name t
   echo a > "$wk/w/a"; git -C "$wk/w" add -A; git -C "$wk/w" commit -q -m a
   git -C "$wk/w" remote add origin "$wk/o.git"; git -C "$wk/w" push -q origin main
+  printf '%s' "$wk"
+}
+
+# 태그가 origin 에 실제로 도달했는지 본다. 로컬 태그만 보면 push 누락을 놓친다.
+tag_case() {
+  local pretag="$1" wk body rc out
+  wk="$(tagbed)"
   [ -n "$pretag" ] && git -C "$wk/w" tag "$pretag"
+  body="$(mktemp)"; extract_step "Create version tag" > "$body"
+  ( cd "$wk/w" && VERSION=v1.2.0 bash "$body" ) >/dev/null 2>&1
+  rc=$?
+  out="$(git -C "$wk/o.git" tag --list 'v*' | tr '\n' ',')"
+  rm -rf "$wk" "$body"
+  printf '%s rc=%s' "$out" "$rc"
+}
+assert_json_eq "태그가 없으면 배포 커밋에 만들어 origin 까지 push 한다" \
+  "$(tag_case '' | jq -R .)" '"v1.2.0, rc=0"'
+# 재실행 안전성: 같은 태그가 이미 있으면 warn 후 정상 종료한다. 검사가 없으면
+# `git tag -a` 가 exit 128 로 죽어 알림 job 이 붉어진다.
+assert_json_eq "같은 태그가 이미 있으면 warn 후 정상 종료 (재실행 안전)" \
+  "$(tag_case v1.2.0 | jq -R .)" '" rc=0"'
+
+# 같은 번호가 같은 커밋에 이미 origin 에 있으면(동시 배포 경합) 경고로 끝낸다.
+race_rc() {
+  local wk body rc
+  wk="$(tagbed)"
+  # origin 에만 태그를 심는다 — 로컬 검사는 통과하고 push 에서 진다.
+  git -C "$wk/w" tag v1.2.0 && git -C "$wk/w" push -q origin refs/tags/v1.2.0 \
+    && git -C "$wk/w" tag -d v1.2.0 >/dev/null
+  body="$(mktemp)"; extract_step "Create version tag" > "$body"
+  ( cd "$wk/w" && VERSION=v1.2.0 bash "$body" ) >/dev/null 2>&1
+  rc=$?
+  rm -rf "$wk" "$body"
+  printf '%s' "$rc"
+}
+assert_json_eq "같은 커밋에 남이 먼저 만든 태그는 경합으로 보고 정상 종료" \
+  "$(race_rc | jq -R 'tonumber')" '0'
+
+# push 가 **다른 커밋**의 같은 번호에 막히면 조용히 넘기지 않는다.
+# 그 상태를 통과시키면 공지된 번호가 다른 커밋을 가리킨 채 남는다.
+conflict_rc() {
+  local wk body rc
+  wk="$(tagbed)"
+  # origin 에 다른 커밋으로 같은 번호를 심는다.
+  git -C "$wk/w" checkout -q -b other
+  echo z > "$wk/w/z"; git -C "$wk/w" add -A; git -C "$wk/w" commit -q -m z
+  git -C "$wk/w" tag v1.2.0 && git -C "$wk/w" push -q origin refs/tags/v1.2.0 \
+    && git -C "$wk/w" tag -d v1.2.0 >/dev/null
+  git -C "$wk/w" checkout -q main
+  body="$(mktemp)"; extract_step "Create version tag" > "$body"
+  ( cd "$wk/w" && VERSION=v1.2.0 bash "$body" ) >/dev/null 2>&1
+  rc=$?
+  rm -rf "$wk" "$body"
+  printf '%s' "$rc"
+}
+assert_json_eq "다른 커밋의 같은 번호와 충돌하면 실패한다 (조용히 넘기지 않음)" \
+  "$(conflict_rc | jq -R 'tonumber')" '1'
+
+# 게이트 성질: `bump: existing`(뒤따르는 환경)에서는 이 스텝이 아예 안 돈다.
+# YAML if 조건은 러너가 평가하므로 문자열로 확인한다.
+tag_if="$(awk '/- name: Create version tag$/{f=1} f&&/^ +if:/{print;exit}' \
+          "$ROOT/.github/workflows/deploy-notify.yml")"
+case "$tag_if" in
+  *"version_bump != 'existing'"*) _pass "이미 태깅된 커밋에서는 태그 스텝이 건너뛰어진다" ;;
+  *) _fail "태그 스텝에 existing 게이트가 없다: ${tag_if}" ;;
+esac
+case "$tag_if" in
+  *"thread_ts != ''"*) _pass "전송 확인 전에는 번호를 소비하지 않는다" ;;
+  *) _fail "태그 스텝에 전송 확인 게이트가 없다: ${tag_if}" ;;
+esac
+# 태그 스텝에 환경 조건이 남아 있으면 dev 가 태깅 주체가 되지 못하고
+# v1.0.0 고정 증상이 그대로 재발한다.
+case "$tag_if" in
+  *"environment == 'prod'"*) _fail "태그 스텝이 prod 로 제한되어 있다 (버전이 환경 속성이 된다)" ;;
+  *) _pass "태그 스텝은 환경에 제한되지 않는다" ;;
+esac
+
+# --- Create GitHub release (prod only) : 중복 판정 기준은 Release, 태그가 아니다 ---
+# 태그는 이제 dev 배포 시점에 이미 존재하는 것이 **정상**이다. 태그 유무로
+# 건너뛰면 prod Release 가 영구히 만들어지지 않는다.
+release_case() {
+  local release_exists="$1" ghlog wk body out ghdir
+  ghlog="$(mktemp)"; ghdir="$(mktemp -d)"
+  # `gh release view` 는 Release 가 있을 때만 0 을 낸다 — 실물과 같은 성질.
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf "%%s\\n" "$*" >> "%s"\n' "$ghlog"
+    printf 'case "$*" in\n'
+    printf '  "release view"*) exit %s ;;\n' "$([ "$release_exists" = yes ] && echo 0 || echo 1)"
+    printf 'esac\nexit 0\n'
+  } > "$ghdir/gh"
+  chmod +x "$ghdir/gh"
+  wk="$(tagbed)"
+  git -C "$wk/w" tag v1.0.0          # 앞선 환경이 만들어 둔 태그
   body="$(mktemp)"; out="$(mktemp)"
-  extract_step "Create version tag and release (prod only)" > "$body"
+  extract_step "Create GitHub release (prod only)" > "$body"
   ( cd "$wk/w" && PATH="$ghdir:$PATH" GH_TOKEN=x VERSION=v1.0.0 \
       CTX="$(cat "$ROOT/tests/fixtures/context_prod.json")" \
-      GITHUB_OUTPUT="$out" bash "$body" ) >/dev/null 2>&1 || true
+      GITHUB_OUTPUT="$out" bash "$body" ) >/dev/null 2>&1
   grep -c 'release create' "$ghlog" | tr -d ' '
   rm -rf "$ghlog" "$ghdir" "$wk" "$body" "$out"
 }
-assert_json_eq "태그가 없으면 Release 를 1회 만든다" \
-  "$(release_case '' | jq -R 'tonumber')" '1'
-assert_json_eq "태그가 이미 있으면 Release 를 만들지 않는다 (중복 방지)" \
-  "$(release_case v1.0.0 | jq -R 'tonumber')" '0'
+assert_json_eq "태그가 이미 있어도(정상 경로) Release 는 만든다" \
+  "$(release_case no | jq -R 'tonumber')" '1'
+assert_json_eq "Release 가 이미 있으면 만들지 않는다 (중복 방지)" \
+  "$(release_case yes | jq -R 'tonumber')" '0'
 
-# 위 두 어서션만으로는 기존-태그 검사의 유무를 구별하지 못한다 — 검사를 지워도
-# `git tag -a` 가 기존 태그에서 어차피 중단되어 `release create` 에 도달하지
-# 않으므로 호출 수는 0으로 같다. **판별 성질은 종료코드다.**
-# 검사가 있으면 warn + exit 0 (재실행이 job 을 붉게 만들지 않는다),
-# 없으면 git 이 exit 128 로 죽는다.
-release_rc() {
-  local pretag="$1" ghdir wk body rc
-  ghdir="$(mktemp -d)"; printf '#!/usr/bin/env bash\nexit 0\n' > "$ghdir/gh"; chmod +x "$ghdir/gh"
-  wk="$(mktemp -d)"
-  git init -q --bare "$wk/o.git"; git init -q -b main "$wk/w"
-  git -C "$wk/w" config user.email t@t.io; git -C "$wk/w" config user.name t
-  echo a > "$wk/w/a"; git -C "$wk/w" add -A; git -C "$wk/w" commit -q -m a
-  git -C "$wk/w" remote add origin "$wk/o.git"; git -C "$wk/w" push -q origin main
-  [ -n "$pretag" ] && git -C "$wk/w" tag "$pretag"
-  body="$(mktemp)"
-  extract_step "Create version tag and release (prod only)" > "$body"
+# 태그가 없으면 Release 를 만들지 않고 실패한다 — 앞선 태그 스텝이 실패했다는
+# 뜻이고, 태그 없는 Release 를 만들면 gh 가 임의 커밋에 태그를 새로 만든다.
+notag_rc() {
+  local ghdir wk body rc
+  ghdir="$(mktemp -d)"; printf '#!/usr/bin/env bash\nexit 1\n' > "$ghdir/gh"
+  chmod +x "$ghdir/gh"
+  wk="$(tagbed)"
+  body="$(mktemp)"; extract_step "Create GitHub release (prod only)" > "$body"
   ( cd "$wk/w" && PATH="$ghdir:$PATH" GH_TOKEN=x VERSION=v1.0.0 \
       CTX="$(cat "$ROOT/tests/fixtures/context_prod.json")" \
       GITHUB_OUTPUT=/dev/null bash "$body" ) >/dev/null 2>&1
@@ -603,10 +685,8 @@ release_rc() {
   rm -rf "$ghdir" "$wk" "$body"
   printf '%s' "$rc"
 }
-assert_json_eq "기존 태그에서 warn 후 정상 종료한다 (재실행이 job 을 붉게 하지 않음)" \
-  "$(release_rc v1.0.0 | jq -R 'tonumber')" '0'
-assert_json_eq "태그가 없을 때도 정상 종료한다" \
-  "$(release_rc '' | jq -R 'tonumber')" '0'
+assert_json_eq "태그가 없으면 Release 를 만들지 않고 실패한다" \
+  "$(notag_rc | jq -R 'tonumber')" '1'
 
 # --- 빈 커밋 범위(같은 커밋 재배포)는 릴리즈 경로를 타지 않는다 ---
 # 타면 next-version 이 새 버전을 계산해 내용이 빈 릴리즈와 <!here> 핑을 만든다.

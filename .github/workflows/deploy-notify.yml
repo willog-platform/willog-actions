@@ -360,6 +360,8 @@ jobs:
 
           printf 'json=%s\n' "$CTX" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$(printf '%s' "$VERSION" | jq -r '.next')" >> "$GITHUB_OUTPUT"
+          # 태그 스텝의 게이트. `existing` 이면 이 커밋에 이미 태그가 있다.
+          printf 'version_bump=%s\n' "$(printf '%s' "$VERSION" | jq -r '.bump')" >> "$GITHUB_OUTPUT"
 
       - name: Send release note
         id: send
@@ -400,7 +402,52 @@ jobs:
           printf '%s' "$RESP2" | jq -e '.ok' >/dev/null \
             || printf '::warning::스레드 답글 전송 실패: %s\n' "$(printf '%s' "$RESP2" | jq -r '.error // "unknown"')"
 
-      - name: Create version tag and release (prod only)
+      # 버전 태그는 **환경과 무관하게** 배포된 커밋에 붙는다. 버전은 커밋
+      # (아티팩트)의 속성이고 환경은 그 아티팩트가 어디까지 승격됐는지일 뿐이다.
+      # `bump: existing` 은 next-version.sh 가 "이 커밋엔 이미 태그가 있다"고
+      # 판정한 경우이므로 이 스텝을 건너뛴다 — 첫 배포 환경(보통 dev)이 태깅
+      # 주체가 되고 뒤따르는 stage·prod 는 같은 번호를 역조회해 공지한다.
+      #
+      # 전송 확인(`thread_ts`) 뒤에 두는 것이 중요하다. 번호는 노트 본문에
+      # 들어가므로 전송 **전에** 확정돼야 하지만, 태그를 **전송 전에** 만들면
+      # 전송이 실패한 배포가 번호를 소비해 아무도 못 본 버전이 생긴다.
+      # 전송 실패 시에는 태그가 없으니 다음 배포가 같은 번호를 다시 계산한다.
+      - name: Create version tag
+        if: ${{ steps.channel.outputs.release == 'true' && steps.send.outputs.thread_ts != '' && steps.release_ctx.outputs.version_bump != 'existing' }}
+        env:
+          VERSION: ${{ steps.release_ctx.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse --verify --quiet "refs/tags/${VERSION}" >/dev/null; then
+            echo "::warning::태그 ${VERSION} 이 이미 로컬에 존재합니다 — 생성을 건너뜁니다"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release ${VERSION}"
+
+          # push 실패를 그냥 warning 으로 넘기면 **공지된 번호에 태그가 없는**
+          # 상태가 남아 다음 배포가 같은 번호를 또 공지한다. 다만 두 환경이
+          # 같은 커밋을 동시에 배포하면 양쪽이 같은 번호를 계산해 한쪽 push 가
+          # 진다 — 그 경우는 결과가 우리가 원하는 상태(그 번호가 그 커밋에
+          # 붙어 있음)와 같으므로 경고로 끝낸다. 그 외에는 크게 실패한다.
+          if git push origin "refs/tags/${VERSION}"; then
+            echo "::notice::${VERSION} 태그를 이 커밋에 생성했습니다"
+            exit 0
+          fi
+          git fetch -q origin "refs/tags/${VERSION}:refs/tags/${VERSION}-remote" 2>/dev/null || true
+          if [ "$(git rev-parse --verify --quiet "refs/tags/${VERSION}-remote^{commit}" || true)" \
+             = "$(git rev-parse HEAD)" ]; then
+            echo "::warning::${VERSION} 태그가 다른 배포에서 같은 커밋에 먼저 생성됐습니다 — 그대로 둡니다"
+            exit 0
+          fi
+          echo "::error::${VERSION} 태그 push 실패 — 공지된 버전에 태그가 없습니다"
+          exit 1
+
+      # GitHub Release 는 prod 에서만 만든다. **중복 판정 기준이 태그가 아니라
+      # Release 다** — 태그는 이제 dev 배포 시점에 이미 존재하는 것이 정상이므로,
+      # 태그 유무로 건너뛰면 prod Release 가 영구히 만들어지지 않는다.
+      - name: Create GitHub release (prod only)
         if: ${{ steps.channel.outputs.release == 'true' && inputs.environment == 'prod' && steps.send.outputs.thread_ts != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -408,9 +455,13 @@ jobs:
           CTX: ${{ steps.release_ctx.outputs.json }}
         run: |
           set -euo pipefail
-          if git rev-parse --verify --quiet "refs/tags/${VERSION}" >/dev/null; then
-            echo "::warning::태그 ${VERSION} 이 이미 존재합니다 — Release 생성을 건너뜁니다"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "::warning::Release ${VERSION} 이 이미 존재합니다 — 생성을 건너뜁니다"
             exit 0
+          fi
+          if ! git rev-parse --verify --quiet "refs/tags/${VERSION}" >/dev/null; then
+            echo "::error::태그 ${VERSION} 이 없어 Release 를 만들 수 없습니다 (태그 스텝 실패 확인)"
+            exit 1
           fi
 
           NOTES="$(printf '%s' "$CTX" | jq -r '
@@ -421,11 +472,6 @@ jobs:
             + (if (.changes.migrations|length) == 0 then "- 없음"
                else (.changes.migrations | map("- " + .) | join("\n")) end)
             + "\n\n커밋 범위: `" + .range.base + ".." + .range.head + "`"')"
-
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$VERSION" -m "Release ${VERSION}"
-          git push origin "refs/tags/${VERSION}"
 
           printf '%s' "$NOTES" | gh release create "$VERSION" \
             --title "Release ${VERSION}" --notes-file -

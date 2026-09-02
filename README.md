@@ -145,11 +145,11 @@ git ls-files | grep -E 'Controller|controller'
 | `deploy_status` | string | `result` 시 | `""` | `success` \| `failure` \| `cancelled` |
 | `release_channel_id` | string | | `""` | 환경별 채널을 쓰지 않는 환경의 릴리즈 노트 채널(공용 폴백). **환경별 값과 둘 다 비우면 릴리즈 노트가 dev 채널로 간다** |
 | `release_channel_dev` / `_stage` / `_prod` | string | | `""` | 환경별 릴리즈 노트 채널. 해당 환경에서 `release_channel_id` 를 **이긴다**. 비운 환경만 공용 값으로 떨어진다 |
-| `release_envs` | string | | `stage,prod` | 릴리즈 노트 형식을 쓰는 환경(쉼표 구분). dev 배포도 릴리즈 채널에 보이게 하려면 `dev,stage,prod`. prod 의 v* 태그·Release 는 목록과 무관하게 prod 에서만 |
+| `release_envs` | string | | `stage,prod` | 릴리즈 노트 형식을 쓰는 환경(쉼표 구분). dev 배포도 릴리즈 채널에 보이게 하려면 `dev,stage,prod`. GitHub Release 는 목록과 무관하게 prod 에서만 |
 | `migration_glob` | string | 릴리즈 경로 필수 | `""` | 위 표 참고. 릴리즈 경로에서 빈 값이면 크게 실패한다. 마이그레이션이 없는 repo(프론트엔드 등)는 `none` 으로 명시 |
 | `api_path_glob` | string | | `""` | 컨트롤러 경로. 미지정 시 API 표면 감지를 건너뛴다 |
 | `api_exclude_glob` | string | | `**/*.spec.ts,**/*Test.kt,**/test/**` | API 감지에서 제외할 경로 |
-| `version_bump` | string | | `auto` | `auto` \| `patch` \| `minor` \| `major`. `auto` 는 PR 라벨에서 산출 |
+| `version_bump` | string | | `auto` | `auto` \| `patch` \| `minor` \| `major`. `auto` 는 PR 라벨에서 산출. **이미 태깅된 커밋의 배포에서는 무시된다**(경고) |
 | `max_commits` | string | | `100` | PR 역산 시 순회할 커밋 상한 |
 
 secrets
@@ -161,6 +161,45 @@ secrets
 
 `ARGOCD_TOKEN_*` 은 전달하지 않는다 — 알림은 URL만 필요하고 ArgoCD API를
 호출하지 않는다.
+
+### 버전 관리 — 버전은 환경이 아니라 커밋의 속성이다
+
+규칙은 하나다. **배포된 커밋에 `v*` 태그가 붙어 있으면 그것이 버전이고, 없으면
+지금 만든다.** 환경별 분기가 없다.
+
+| 상황 | 버전 | 태그 | GitHub Release |
+|---|---|---|---|
+| 릴리즈 경로를 처음 타는 환경 | PR 라벨로 계산 | **생성·push** | 없음 |
+| 뒤따르는 stage·prod 배포 | 그 커밋의 태그를 역조회 | 그대로 | prod 에서 생성 |
+| 같은 커밋 재배포 | 같은 번호 | 그대로 | 이미 있으면 건너뜀 |
+| dev 를 우회한 핫픽스 배포 | 계산 | 그 환경이 생성 | prod 면 생성 |
+
+태깅 주체는 `release_envs` 의 첫 환경이다 — `dev,stage,prod` 면 dev 가, 기본값
+`stage,prod` 면 stage 가 태그를 만든다(릴리즈 경로를 타지 않는 환경은 버전을
+계산하지도, 공지하지도 않는다).
+
+결과적으로 `#deploy_summary_dev` → `_stage` → `_prod` 가 **같은 번호**로 승격을
+추적한다. dev 까지만 가고 끝난 번호는 prod 에서 건너뛴 번호로 남는다 — 정상이다.
+
+bump 판정(`auto`)은 `deployed/{env}..HEAD` 구간 PR 라벨에서 나온다:
+`breaking` → major, `feature` → minor, 그 외 → patch. 계산이 일어나는 시점은
+**태깅되지 않은 커밋을 처음 배포하는 환경**이므로 보통 dev 다.
+
+주의할 성질 셋:
+
+- **태그는 Slack 전송이 확인된 뒤에 만든다.** 번호는 노트 본문에 들어가므로
+  전송 전에 확정되어야 하지만, 전송 전에 태그를 만들면 전송이 실패한 배포가
+  번호를 소비해 아무도 보지 못한 버전이 생긴다. 전송이 실패하면 태그가 없으니
+  다음 배포가 같은 번호를 다시 계산한다.
+- **중복 Release 판정 기준은 태그가 아니라 Release 다.** 태그는 prod 시점에
+  이미 존재하는 것이 정상이므로, 태그 유무로 건너뛰면 prod Release 가 영구히
+  만들어지지 않는다.
+- **후보 태그는 `v{major}[.{minor}[.{patch}]]` 형식만이다.** `deployed/{env}`
+  마커도, `v1.2.3-rc1` 같은 prerelease 도 버전으로 인정하지 않는다. 사람이
+  다른 기준을 원하면 정식 형태의 태그를 직접 만들면 그것이 그대로 쓰인다.
+
+태그 push 에는 호출 job 의 `permissions: contents: write` 가 필요하다
+(마커 태그와 같은 권한이므로 추가 설정은 없다).
 
 ### 선행 작업
 
