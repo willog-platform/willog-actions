@@ -20,9 +20,11 @@ fi
 # 커밋당 API 1회. squash/merge/rebase 모두에서 동작하는 유일한 방법.
 NUMS=""
 for sha in $SHAS; do
+  gh_err_file="$(mktemp)"
   if got="$("$GH" api "repos/${REPO}/commits/${sha}/pulls" \
              -H 'Accept: application/vnd.github+json' \
-             --jq '.[].number' 2>/dev/null)"; then
+             --jq '.[].number' 2>"$gh_err_file")"; then
+    rm -f "$gh_err_file"
     if [ -n "$got" ]; then
       NUMS="${NUMS}${got}
 "
@@ -34,7 +36,13 @@ for sha in $SHAS; do
     # needs 가 아니므로 배포는 영향받지 않고, deployed/{env} 태그는 전송
     # 성공 후에만 이동하므로 다음 배포의 노트가 이 범위를 함께 담아
     # 자동 복구된다.
-    die "PR 조회 실패: ${sha} (gh api 오류 — 인증·레이트리밋·네트워크 확인). 목록을 조용히 불완전하게 내지 않는다."
+    # gh 의 stderr 원문을 한 줄로 접어 함께 낸다. 러너는 `::error::` 를 줄
+    # 단위로 해석하므로 개행이 남으면 뒷줄이 평문으로 떨어져 나간다.
+    # 흔한 원인: 호출 job permissions 에 `pull-requests: read` 누락(403),
+    # 레이트리밋, 네트워크.
+    gh_err="$(tr '\n\r' '  ' < "$gh_err_file" | sed 's/  */ /g; s/ $//')"
+    rm -f "$gh_err_file"
+    die "PR 조회 실패: ${sha} — gh: ${gh_err:-(stderr 없음)} (호출 job permissions 의 pull-requests: read·레이트리밋·네트워크 확인). 목록을 조용히 불완전하게 내지 않는다."
   fi
 done
 

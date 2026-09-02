@@ -21,15 +21,18 @@ fi
 RAW=""
 for n in $NUMS; do
   got=""
+  gh_err_file="$(mktemp)"
   if got="$("$GH" pr view "$n" --repo "$REPO" \
-             --json number,title,author,labels,body,url 2>/dev/null)" \
+             --json number,title,author,labels,body,url 2>"$gh_err_file")" \
      && printf '%s' "$got" | jq -e 'type == "object"' >/dev/null 2>&1; then
-    :
+    rm -f "$gh_err_file"
   else
+    gh_err="$(tr '\n\r' '  ' < "$gh_err_file" | sed 's/  */ /g; s/ $//')"
+    rm -f "$gh_err_file"
     # 조회 실패한 PR 을 목록에서 조용히 빼지 않는다. 번호와 링크는 이미
     # 알고 있으므로 자리표시자를 넣어 PR 자체는 노트에 남긴다 —
     # 스펙 §8의 "조용한 절단 금지". 알림은 계속 발송된다.
-    warn "PR #${n} 조회 실패 — 자리표시자로 대체한다"
+    warn "PR #${n} 조회 실패 — 자리표시자로 대체한다 (gh: ${gh_err:-stderr 없음})"
     got="$(jq -n --argjson number "$n" \
             --arg url "https://github.com/${REPO}/pull/${n}" \
             '{number:$number, title:"(PR 조회 실패)", url:$url,

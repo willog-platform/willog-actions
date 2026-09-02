@@ -30,7 +30,10 @@
 `contents: write` 를 열면 `build-and-push`(서드파티 빌드 툴 실행)·`create-manifest`·
 `argocd-sync` 까지 쓰기 가능한 토큰을 받는데, 이 job들은 그 권한을 쓰지 않는다.
 재사용 워크플로 호출은 **호출하는 job 레벨**에서 `permissions:` 를 선언할 수
-있으므로, 아래처럼 알림을 보내는 두 job에만 준다. 이렇게 하면 피해 범위가
+있으므로, 아래처럼 알림을 보내는 두 job에만 준다. **job 레벨에 `permissions:` 를
+쓰면 적지 않은 스코프는 전부 `none` 이 된다** — `pull-requests: read` 를
+빠뜨리면 커밋→PR 조회가 403 으로 죽어 릴리즈 노트가 0통 나간다(2026-09-02
+rule-engine 첫 stage 배포에서 실제 발생). 아래 세 줄을 그대로 쓴다. 이렇게 하면 피해 범위가
 그 두 job으로 좁아지고, "알림 job은 배포를 막지 않는다"는 경계(위 설계 원칙)가
 호출 측 파일만 봐도 보인다 — 최상위에 있으면 그 경계가 다른 job들과 뒤섞여
 안 보인다.
@@ -39,7 +42,8 @@
 jobs:
   notify-start:
     permissions:
-      contents: write
+      contents: write        # deployed/{env}·v* 태그 push
+      pull-requests: read    # 커밋→PR 역산·PR 본문 조회. 빠지면 403 으로 릴리즈 노트 0통
       id-token: write
     uses: willog-platform/willog-actions/.github/workflows/deploy-notify.yml@v1
     with:
@@ -56,7 +60,8 @@ jobs:
 
   notify-result:
     permissions:
-      contents: write
+      contents: write        # deployed/{env}·v* 태그 push
+      pull-requests: read    # 커밋→PR 역산·PR 본문 조회. 빠지면 403 으로 릴리즈 노트 0통
       id-token: write
     needs: [prepare, argocd-sync]
     if: always()

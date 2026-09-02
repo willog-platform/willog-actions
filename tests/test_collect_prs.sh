@@ -50,3 +50,25 @@ case "$err" in
   *'::error::'*) _pass "gh 조회 실패는 ::error:: 로 알린다" ;;
   *)             _fail "gh 조회 실패는 ::error:: 로 알린다" ;;
 esac
+
+# gh 가 stderr 로 낸 진짜 원인(403·레이트리밋·네트워크)이 ::error:: 안에 그대로
+# 보여야 한다. 버리면 실패 원인을 러너 로그에서 알 수 없다 — 2026-09-02 첫
+# stage 실배포에서 pull-requests:read 누락 403 이 "gh api 오류" 로만 남아
+# 원인 추적에 시간을 썼다.
+FAILBIN2="$(mktemp -d)/gh"
+printf '#!/usr/bin/env bash\necho "gh: Resource not accessible by integration (HTTP 403)" >&2\nexit 1\n' > "$FAILBIN2"; chmod +x "$FAILBIN2"
+err="$( cd "$d" && GH="$FAILBIN2" bash "$S" o/r "$BASE" "$HEAD_SHA" 2>&1 >/dev/null || true )"
+case "$err" in
+  *'::error::'*'Resource not accessible by integration (HTTP 403)'*)
+    _pass "gh 조회 실패 시 gh 의 stderr 원문이 ::error:: 에 포함된다" ;;
+  *) _fail "gh 조회 실패 시 gh 의 stderr 원문이 ::error:: 에 포함된다 (got: $(printf '%s' "$err" | head -c 200))" ;;
+esac
+# ::error:: 는 한 줄이어야 러너가 워크플로 커맨드로 해석한다 — 여러 줄 stderr 는 한 줄로 접힌다.
+FAILBIN3="$(mktemp -d)/gh"
+printf '#!/usr/bin/env bash\nprintf "line one\\nline two\\n" >&2\nexit 1\n' > "$FAILBIN3"; chmod +x "$FAILBIN3"
+err="$( cd "$d" && GH="$FAILBIN3" bash "$S" o/r "$BASE" "$HEAD_SHA" 2>&1 >/dev/null || true )"
+n="$(printf '%s\n' "$err" | grep -c '::error::')"
+case "$err" in
+  *'line one'*'line two'*) [ "$n" = "1" ] && _pass "여러 줄 gh stderr 는 ::error:: 한 줄로 접힌다" || _fail "여러 줄 gh stderr 는 ::error:: 한 줄로 접힌다 (::error:: ${n}개)" ;;
+  *) _fail "여러 줄 gh stderr 는 ::error:: 한 줄로 접힌다 (내용 누락)" ;;
+esac
