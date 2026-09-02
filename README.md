@@ -114,9 +114,12 @@ Slack 메시지의 ArgoCD 링크가 `applications/argocd/{service_name}-{environ
 | `willog-vision-api` | `infra/database/src/main/resources/db/migration/V*.sql` | `apps/*/src/main/kotlin/**/*Controller.kt` |
 | `willog-telemetry-api` | `libs/database/src/*/migrations/Migration*.ts` | `apps/*/src/**/*.controller.ts` |
 | `willog-member-api` | `libs/database/src/*/migrations/Migration*.ts` | `apps/*/src/**/*.controller.ts` |
+| `willog-vision-web` | `none` ← 마이그레이션 없음(프론트엔드) | (미지정) |
 
 `migration_glob` 은 릴리즈 경로에서 필수다. 기본값을 두지 않는 이유는, 지정을
-잊었을 때 마이그레이션이 있는데 없다고 조용히 보고하는 것이 최악이기 때문이다.
+잊었을 때 마이그레이션이 있는데 없다고 조용히 보고하는 것이 최악이기 때문이다. 그래서
+마이그레이션이 **정말로 없는** repo 는 `none` 이라고 **명시**한다 — 빈 값(설정을
+잊음)과 `none`(없다고 선언함)은 다르게 다뤄지고, 후자만 통과한다.
 새 repo를 붙일 때는 위 표를 짐작으로 채우지 말고 실측한다:
 
 ```bash
@@ -140,7 +143,7 @@ git ls-files | grep -E 'Controller|controller'
 | `deploy_status` | string | `result` 시 | `""` | `success` \| `failure` \| `cancelled` |
 | `release_channel_id` | string | | `""` | 릴리즈 노트 채널. **비우면 릴리즈 노트가 dev 채널로 간다** |
 | `release_envs` | string | | `stage,prod` | 릴리즈 노트 형식을 쓰는 환경(쉼표 구분). dev 배포도 릴리즈 채널에 보이게 하려면 `dev,stage,prod`. prod 의 v* 태그·Release 는 목록과 무관하게 prod 에서만 |
-| `migration_glob` | string | 릴리즈 경로 필수 | `""` | 위 표 참고. 릴리즈 경로에서 빈 값이면 크게 실패한다 |
+| `migration_glob` | string | 릴리즈 경로 필수 | `""` | 위 표 참고. 릴리즈 경로에서 빈 값이면 크게 실패한다. 마이그레이션이 없는 repo(프론트엔드 등)는 `none` 으로 명시 |
 | `api_path_glob` | string | | `""` | 컨트롤러 경로. 미지정 시 API 표면 감지를 건너뛴다 |
 | `api_exclude_glob` | string | | `**/*.spec.ts,**/*Test.kt,**/test/**` | API 감지에서 제외할 경로 |
 | `version_bump` | string | | `auto` | `auto` \| `patch` \| `minor` \| `major`. `auto` 는 PR 라벨에서 산출 |

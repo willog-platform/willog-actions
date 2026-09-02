@@ -55,16 +55,31 @@ basenames_json() {
 # 따라서 raw 인자가 아니라 **조립된 포함 pathspec** 이 비었는지를 검사한다.
 # 공백만·쉼표만인 값(`' '`, `',,'`)은 raw 검사를 통과하지만 조립 결과가 빈다.
 
-# 추가된 마이그레이션만 (A). 수정은 릴리즈 노트에 무의미하다.
-MIG_SPEC="$(build_pathspec glob "$MIGRATION_GLOB")"
-# migration_glob 은 필수 input 이다. 공백만인 값이 조용히 "마이그레이션 없음"
-# 으로 보고되면 필수로 만든 이유가 사라진다 — 있는데 없다고 하는 것이 최악.
-[ -n "$MIG_SPEC" ] \
-  || die "migration_glob 이 유효한 패턴을 만들지 못했다: '${MIGRATION_GLOB}'"
-# 2>/dev/null 을 붙이지 않는다. 잘못된 pathspec 이나 없는 sha 는
-# 조용히 "변경 없음" 으로 보고되면 안 된다 — set -e 로 크게 실패한다.
-# shellcheck disable=SC2086
-MIGRATIONS="$(git diff --name-only --diff-filter=A "${BASE}..${HEAD_SHA}" -- $MIG_SPEC | basenames_json)"
+# ── `none` 센티널 ─────────────────────────────────────────────────
+# migration_glob 을 필수로 둔 이유는 "있는데 없다고 조용히 보고"를 막기
+# 위해서다(설정 누락 = 빈 값 = die). 그러면 마이그레이션이 **정말로 없는**
+# repo(프론트엔드 등)는 그 사실을 말할 수단이 있어야 한다. `none` 이 그것이다.
+# 센티널로 명시 처리한다 — pathspec 으로 흘려보내면 "매치되는 파일이 없어서
+# 0건" 이 되어 우연히 맞는 것이고, `none` 이라는 이름의 파일이 생기는 순간
+# 조용히 깨진다.
+MIG_NORM="$(printf '%s' "$MIGRATION_GLOB" \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+            | tr '[:upper:]' '[:lower:]')"
+if [ "$MIG_NORM" = "none" ]; then
+  note "migration_glob=none — 이 repo 는 마이그레이션이 없다고 선언했습니다"
+  MIGRATIONS='[]'
+else
+  # 추가된 마이그레이션만 (A). 수정은 릴리즈 노트에 무의미하다.
+  MIG_SPEC="$(build_pathspec glob "$MIGRATION_GLOB")"
+  # 공백만인 값이 조용히 "마이그레이션 없음" 으로 보고되면 필수로 만든 이유가
+  # 사라진다 — 있는데 없다고 하는 것이 최악.
+  [ -n "$MIG_SPEC" ] \
+    || die "migration_glob 이 유효한 패턴을 만들지 못했다: '${MIGRATION_GLOB}'"
+  # 2>/dev/null 을 붙이지 않는다. 잘못된 pathspec 이나 없는 sha 는
+  # 조용히 "변경 없음" 으로 보고되면 안 된다 — set -e 로 크게 실패한다.
+  # shellcheck disable=SC2086
+  MIGRATIONS="$(git diff --name-only --diff-filter=A "${BASE}..${HEAD_SHA}" -- $MIG_SPEC | basenames_json)"
+fi
 
 API_FILES='[]'
 if [ -n "$API_GLOB" ]; then

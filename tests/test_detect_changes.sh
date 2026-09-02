@@ -38,6 +38,36 @@ assert_json_eq "변경 없음" "$(printf '%s' "$out" | jq '{migrations, api_touc
 
 assert_fail "migration_glob 누락 시 실패" bash "$S" "$BASE" "$HEAD_SHA"
 
+# --- migration_glob=none : 마이그레이션이 없는 repo(프론트엔드 등)의 명시 옵트아웃 ---
+# 필수 input 으로 둔 이유는 "있는데 없다고 조용히 보고"를 막기 위해서다. 그러면
+# 진짜로 없는 repo 는 그 사실을 **명시**할 수 있어야 한다. 빈 값(=설정 누락)과
+# `none`(=없다고 선언함)은 다르게 다룬다.
+out="$(cd "$d" && bash "$S" "$BASE" "$HEAD_SHA" none 'apps/*/src/**/*.controller.ts' '**/*.spec.ts' 2>/dev/null)"
+assert_json_eq "migration_glob=none → 마이그레이션 없음 (V*.sql 이 범위에 있어도)" \
+  "$(printf '%s' "$out" | jq '.migrations')" '[]'
+assert_json_eq "none 이어도 API 표면 감지는 그대로 동작한다" \
+  "$(printf '%s' "$out" | jq '{api_touched, api_files}')" \
+  '{"api_touched":true,"api_files":["user.controller.ts"]}'
+
+out="$(cd "$d" && bash "$S" "$BASE" "$HEAD_SHA" '  NONE  ' 2>/dev/null)"
+assert_json_eq "none 은 대소문자·앞뒤 공백을 가리지 않는다" \
+  "$(printf '%s' "$out" | jq '.migrations')" '[]'
+
+# 부하검증: `none` 이 pathspec 으로 흘러 우연히 0건이 되는 것이 아니라
+# **센티널로 처리**됨을 증명한다. `none` 이라는 이름의 파일을 실제로 추가하면
+# pathspec 해석에서는 1건이 잡히지만, 센티널 처리에서는 여전히 0건이어야 한다.
+d2="$(mktemp -d)"
+git -C "$d2" init -q -b main
+git -C "$d2" config user.email t@t.io; git -C "$d2" config user.name t
+echo base > "$d2/README"; git -C "$d2" add -A; git -C "$d2" commit -q -m base
+B2="$(git -C "$d2" rev-parse HEAD)"
+echo x > "$d2/none"; git -C "$d2" add -A; git -C "$d2" commit -q -m add-none
+H2="$(git -C "$d2" rev-parse HEAD)"
+assert_json_eq "증명: 'none' 이름의 파일이 추가돼도 센티널은 0건을 낸다 (pathspec 이 아님)" \
+  "$(cd "$d2" && bash "$S" "$B2" "$H2" none 2>/dev/null | jq '.migrations')" '[]'
+assert_json_eq "증명 전제: 같은 파일이 일반 glob 으로는 1건으로 잡힌다" \
+  "$(cd "$d2" && bash "$S" "$B2" "$H2" 'non?' 2>/dev/null | jq '.migrations')" '["none"]'
+
 # 변경 없는 범위에서 stdout 뿐 아니라 **종료코드도 0** 이어야 한다.
 # 이것이 실운영에서 가장 흔한 경우다.
 ( cd "$d" && bash "$S" "$HEAD_SHA" "$HEAD_SHA" 'src/**/V*.sql' 'apps/**/*.ts' '**/*.spec.ts' >/dev/null 2>&1 )
