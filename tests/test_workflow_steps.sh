@@ -112,6 +112,34 @@ case "$e" in
   *)               _pass "릴리즈 채널 지정 시에는 경고가 없다" ;;
 esac
 
+# --- release_envs : 릴리즈 노트 대상 환경을 호출 측이 고른다 ---
+# 기본값(stage,prod)은 위 진리표가 담당한다. 여기서는 명시 지정이 판정을 바꾸는지,
+# 형식(공백·빈 값)에 얼마나 관대한지 본다.
+chr() {
+  RELEASE_ENVS="$1" PHASE=result STATUS=success ENVIRONMENT="$2" DEV_CH=Cdev REL_CH=Crel \
+    RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+    run_step "Choose channel" 2>/dev/null | tr '\n' ' ' | jq -Rc .
+}
+assert_json_eq "release_envs=dev,stage,prod → dev 도 릴리즈 채널" \
+  "$(chr 'dev,stage,prod' dev)" '"release=true id=Crel "'
+assert_json_eq "release_envs=stage,prod (명시) → dev 는 여전히 간소" \
+  "$(chr 'stage,prod' dev)" '"release=false id=Cdev "'
+assert_json_eq "release_envs=stage → prod 는 릴리즈 노트 대상이 아니다" \
+  "$(chr 'stage' prod)" '"release=false id=Cdev "'
+assert_json_eq "release_envs 공백 포함 'dev, stage' 도 허용" \
+  "$(chr 'dev, stage' dev)" '"release=true id=Crel "'
+assert_json_eq "release_envs 빈 값 → 기본값(stage,prod) 으로 동작" \
+  "$(chr '' stage)" '"release=true id=Crel "'
+assert_json_eq "release_envs 빈 값 → dev 는 간소" \
+  "$(chr '' dev)" '"release=false id=Cdev "'
+assert_json_eq "release_envs 부분 문자열 'development' 은 dev 와 다르다" \
+  "$(chr 'development,stage' dev)" '"release=false id=Cdev "'
+# release_envs 에 있어도 phase/status 게이트는 그대로다
+assert_json_eq "release_envs=dev 라도 start 는 간소" \
+  "$(RELEASE_ENVS=dev PHASE=start STATUS=success ENVIRONMENT=dev DEV_CH=Cdev REL_CH=Crel \
+     RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+     run_step "Choose channel" 2>/dev/null | tr '\n' ' ' | jq -Rc .)" '"release=false id=Cdev "'
+
 # --- env: 블록과 run: 본문의 변수 참조가 일치하는가 (정적 검사) ---
 # 하네스가 변수를 직접 주입하는 구조상, YAML 의 env: 매핑이 깨져도 런타임
 # 테스트는 통과한다. 참조되는데 env: 에 없는 변수를 정적으로 잡아낸다.

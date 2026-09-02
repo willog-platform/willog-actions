@@ -70,6 +70,7 @@ jobs:
       deploy_status: ${{ needs.argocd-sync.result }}
       dev_channel_id: C02NXP88NP8
       release_channel_id: C0XXXXXXXXX          # 신설한 릴리즈 채널 ID
+      release_envs: dev,stage,prod              # 생략 시 stage,prod
       migration_glob: 'src/main/resources/db/migration/V*.sql'
       api_path_glob: 'src/main/kotlin/**/*Controller.kt'
     secrets:
@@ -133,6 +134,7 @@ git ls-files | grep -E 'Controller|controller'
 | `image_tag` | string | `result` 시 | `""` | 배포된 이미지 태그 |
 | `deploy_status` | string | `result` 시 | `""` | `success` \| `failure` \| `cancelled` |
 | `release_channel_id` | string | | `""` | 릴리즈 노트 채널. **비우면 릴리즈 노트가 dev 채널로 간다** |
+| `release_envs` | string | | `stage,prod` | 릴리즈 노트 형식을 쓰는 환경(쉼표 구분). dev 배포도 릴리즈 채널에 보이게 하려면 `dev,stage,prod`. prod 의 v* 태그·Release 는 목록과 무관하게 prod 에서만 |
 | `migration_glob` | string | 릴리즈 경로 필수 | `""` | 위 표 참고. 릴리즈 경로에서 빈 값이면 크게 실패한다 |
 | `api_path_glob` | string | | `""` | 컨트롤러 경로. 미지정 시 API 표면 감지를 건너뛴다 |
 | `api_exclude_glob` | string | | `**/*.spec.ts,**/*Test.kt,**/test/**` | API 감지에서 제외할 경로 |

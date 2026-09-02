@@ -18,6 +18,10 @@ on:
       api_exclude_glob:  { type: string, required: false, default: "**/*.spec.ts,**/*Test.kt,**/test/**" }
       dev_channel_id:    { type: string, required: true }
       release_channel_id: { type: string, required: false, default: "" }
+      # 릴리즈 노트 형식(+릴리즈 채널)을 쓰는 환경. 쉼표 구분, 공백 허용.
+      # 빈 값이면 기본값과 같다. prod 의 v* 태그·GitHub Release 는 이 목록과
+      # 무관하게 prod 에서만 만든다.
+      release_envs:      { type: string, required: false, default: "stage,prod" }
       max_commits:       { type: string, required: false, default: "100" }
     secrets:
       SLACK_NOTIFICATION_TOKEN: { required: true }
@@ -109,13 +113,26 @@ jobs:
           STATUS: ${{ inputs.deploy_status }}
           DEV_CH: ${{ inputs.dev_channel_id }}
           REL_CH: ${{ inputs.release_channel_id }}
+          RELEASE_ENVS: ${{ inputs.release_envs }}
           RANGE_JSON: ${{ steps.range.outputs.json }}
         run: |
           set -euo pipefail
           # 릴리즈 노트 형식을 쓰는 경우에만 릴리즈 채널로 보낸다.
+          # 대상 환경은 호출 측이 `release_envs` 로 고른다(기본 stage,prod).
+          # 쉼표 구분·공백 허용. 정확히 일치하는 토큰만 인정한다 —
+          # `development` 가 `dev` 로 읽히는 부분 일치는 막는다.
           RELEASE=false
+          IN_RELEASE_ENVS=false
+          for tok in $(printf '%s' "${RELEASE_ENVS:-stage,prod}" | tr ',' ' '); do
+            if [ "$tok" = "$ENVIRONMENT" ]; then IN_RELEASE_ENVS=true; fi
+          done
+          if [ -z "$(printf '%s' "$RELEASE_ENVS" | tr -d ' ,')" ]; then
+            # 빈 값(또는 구분자만)은 기본값으로 되돌린다.
+            IN_RELEASE_ENVS=false
+            case "$ENVIRONMENT" in stage|prod) IN_RELEASE_ENVS=true ;; esac
+          fi
           if [ "$PHASE" = "result" ] && [ "$STATUS" = "success" ] \
-             && { [ "$ENVIRONMENT" = "stage" ] || [ "$ENVIRONMENT" = "prod" ]; }; then
+             && [ "$IN_RELEASE_ENVS" = true ]; then
             RELEASE=true
           fi
 
