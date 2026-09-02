@@ -112,6 +112,67 @@ case "$e" in
   *)               _pass "릴리즈 채널 지정 시에는 경고가 없다" ;;
 esac
 
+# --- 환경별 릴리즈 채널 : dev / stage / prod 를 서로 다른 채널로 보낸다 ---
+# 채널을 분리하기 전에는 세 환경의 릴리즈 노트가 한 채널에 섞였다.
+# 환경별 입력이 있으면 그것이 이기고, 없으면 공용 `release_channel_id` 로
+# 떨어진다 (기존 호출 측을 깨지 않기 위한 폴백).
+chenv() {
+  # $1=environment $2=REL_CH $3=DEV_REL $4=STAGE_REL $5=PROD_REL
+  PHASE=result STATUS=success ENVIRONMENT="$1" DEV_CH=Cdev \
+    REL_CH="$2" REL_CH_DEV="$3" REL_CH_STAGE="$4" REL_CH_PROD="$5" \
+    RELEASE_ENVS='dev,stage,prod' \
+    RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+    run_step "Choose channel" 2>/dev/null | tr '\n' ' ' | jq -Rc .
+}
+assert_json_eq "dev 릴리즈는 release_channel_dev 로 간다" \
+  "$(chenv dev '' Cdevrel Cstagerel Cprodrel)" '"release=true id=Cdevrel "'
+assert_json_eq "stage 릴리즈는 release_channel_stage 로 간다" \
+  "$(chenv stage '' Cdevrel Cstagerel Cprodrel)" '"release=true id=Cstagerel "'
+assert_json_eq "prod 릴리즈는 release_channel_prod 로 간다" \
+  "$(chenv prod '' Cdevrel Cstagerel Cprodrel)" '"release=true id=Cprodrel "'
+# 세 환경이 실제로 서로 다른 채널로 갈라지는지 (같은 값 3개면 위 3건은
+# 우연히 통과한다) — 값이 겹치지 않음을 한 번 더 못 박는다.
+assert_json_eq "세 환경의 채널이 서로 다르다 (서로 다른 값 3개)" \
+  "$(printf '%s\n%s\n%s\n' "$(chenv dev '' A B C)" "$(chenv stage '' A B C)" \
+       "$(chenv prod '' A B C)" | sed 's/.*id=\([^ ]*\).*/\1/' | sort -u \
+       | tr '\n' ',' | jq -Rc .)" '"A,B,C,"'
+assert_json_eq "환경별 채널이 공용 release_channel_id 를 이긴다" \
+  "$(chenv stage Crel Cdevrel Cstagerel Cprodrel)" '"release=true id=Cstagerel "'
+assert_json_eq "환경별 채널이 비면 공용 release_channel_id 로 폴백한다" \
+  "$(chenv stage Crel '' '' '')" '"release=true id=Crel "'
+assert_json_eq "환경별 채널만 있고 해당 환경이 비면 공용으로 폴백" \
+  "$(chenv prod Crel Cdevrel Cstagerel '')" '"release=true id=Crel "'
+assert_json_eq "둘 다 비면 dev 채널 폴백 (기존 동작 유지)" \
+  "$(chenv stage '' '' '' '')" '"release=true id=Cdev "'
+# 간소 경로(release=false)는 환경별 릴리즈 채널의 영향을 받지 않는다.
+assert_json_eq "실패 알림은 환경별 릴리즈 채널이 있어도 dev 채널" \
+  "$(PHASE=result STATUS=failure ENVIRONMENT=stage DEV_CH=Cdev REL_CH=Crel \
+     REL_CH_DEV=Cdevrel REL_CH_STAGE=Cstagerel REL_CH_PROD=Cprodrel \
+     RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+     run_step "Choose channel" 2>/dev/null | tr '\n' ' ' | jq -Rc .)" \
+  '"release=false id=Cdev "'
+e="$(PHASE=result STATUS=success ENVIRONMENT=stage DEV_CH=Cdev REL_CH= \
+     REL_CH_DEV= REL_CH_STAGE=Cstagerel REL_CH_PROD= \
+     RELEASE_ENVS='dev,stage,prod' \
+     RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+     run_step "Choose channel" 2>&1 >/dev/null)"
+case "$e" in
+  *'::warning::'*) _fail "환경별 채널이 지정됐는데 경고가 났다 (경고 피로)" ;;
+  *)               _pass "환경별 채널만 지정해도 경고가 없다" ;;
+esac
+
+# 채널 미지정 경고도 environment 를 로그 라인에 넣는다 — 개행이 살아 있으면
+# 가짜 워크플로 커맨드를 주입할 수 있다 (Resolve ArgoCD URL 과 같은 부류).
+e="$(PHASE=result STATUS=success ENVIRONMENT="$(printf 'stage\n::error::injected')" \
+     DEV_CH=Cdev REL_CH= REL_CH_DEV= REL_CH_STAGE= REL_CH_PROD= \
+     RELEASE_ENVS='dev,stage,prod' \
+     RANGE_JSON='{"base":"a","head":"b","commits":1,"truncated":false}' \
+     run_step "Choose channel" 2>&1 >/dev/null)"
+case "$e" in
+  *'::error::injected'*) _fail "개행이 든 environment 로 채널 경고에 커맨드를 주입할 수 없다" ;;
+  *)                     _pass "개행이 든 environment 로 채널 경고에 커맨드를 주입할 수 없다" ;;
+esac
+
 # --- release_envs : 릴리즈 노트 대상 환경을 호출 측이 고른다 ---
 # 기본값(stage,prod)은 위 진리표가 담당한다. 여기서는 명시 지정이 판정을 바꾸는지,
 # 형식(공백·빈 값)에 얼마나 관대한지 본다.

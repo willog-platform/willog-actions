@@ -74,7 +74,9 @@ jobs:
       image_tag: ${{ needs.prepare.outputs.image_tag }}
       deploy_status: ${{ needs.argocd-sync.result }}
       dev_channel_id: C02NXP88NP8
-      release_channel_id: C0XXXXXXXXX          # 신설한 릴리즈 채널 ID
+      release_channel_dev:   C0XXXXXXXXX        # #deploy_summary_dev
+      release_channel_stage: C0YYYYYYYYY        # #deploy_summary_stage
+      release_channel_prod:  C0ZZZZZZZZZ        # #deploy_summary_prod
       release_envs: dev,stage,prod              # 생략 시 stage,prod
       migration_glob: 'src/main/resources/db/migration/V*.sql'
       api_path_glob: 'src/main/kotlin/**/*Controller.kt'
@@ -141,7 +143,8 @@ git ls-files | grep -E 'Controller|controller'
 | `apps` | string | | `""` | 빌드 대상 (표시용) |
 | `image_tag` | string | `result` 시 | `""` | 배포된 이미지 태그 |
 | `deploy_status` | string | `result` 시 | `""` | `success` \| `failure` \| `cancelled` |
-| `release_channel_id` | string | | `""` | 릴리즈 노트 채널. **비우면 릴리즈 노트가 dev 채널로 간다** |
+| `release_channel_id` | string | | `""` | 환경별 채널을 쓰지 않는 환경의 릴리즈 노트 채널(공용 폴백). **환경별 값과 둘 다 비우면 릴리즈 노트가 dev 채널로 간다** |
+| `release_channel_dev` / `_stage` / `_prod` | string | | `""` | 환경별 릴리즈 노트 채널. 해당 환경에서 `release_channel_id` 를 **이긴다**. 비운 환경만 공용 값으로 떨어진다 |
 | `release_envs` | string | | `stage,prod` | 릴리즈 노트 형식을 쓰는 환경(쉼표 구분). dev 배포도 릴리즈 채널에 보이게 하려면 `dev,stage,prod`. prod 의 v* 태그·Release 는 목록과 무관하게 prod 에서만 |
 | `migration_glob` | string | 릴리즈 경로 필수 | `""` | 위 표 참고. 릴리즈 경로에서 빈 값이면 크게 실패한다. 마이그레이션이 없는 repo(프론트엔드 등)는 `none` 으로 명시 |
 | `api_path_glob` | string | | `""` | 컨트롤러 경로. 미지정 시 API 표면 감지를 건너뛴다 |
@@ -181,7 +184,10 @@ secrets
    `@<현재 sha>` 로 고정한 dev 배포를 1회 디스패치하고, 그 잡 로그에
    `workflow was not found` 가 나오지 않는지 확인한다.
 2. **릴리즈 전용 Slack 채널을 만들고 알림 봇을 초대**한 뒤 채널 ID를 확보해
-   `release_channel_id` 에 넣는다. 초대할 앱은 조직에서 기존 배포 알림을
+   `release_channel_{dev,stage,prod}` 에 넣는다(환경을 한 채널로 모을 때는
+   `release_channel_id` 하나만 써도 된다). 환경을 채널로 가를 때는 **채널마다
+   따로 초대**해야 한다 — 한 채널에만 초대하고 나머지를 빠뜨리면 그 환경의
+   릴리즈 노트만 `not_in_channel` 로 실패한다. 초대할 앱은 조직에서 기존 배포 알림을
    보내던 그 Slack 앱(봇) **`Willog Notification`** 이며(`#cicd` 의 발신자,
    `SLACK_NOTIFICATION_TOKEN` 의 주인), `chat:write` 스코프가 있어야 한다. 봇 초대를
    빠뜨리면 `not_in_channel` 로 **첫 릴리즈 노트부터** 실패한다. 이 단계를

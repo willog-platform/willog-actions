@@ -18,6 +18,12 @@ on:
       api_exclude_glob:  { type: string, required: false, default: "**/*.spec.ts,**/*Test.kt,**/test/**" }
       dev_channel_id:    { type: string, required: true }
       release_channel_id: { type: string, required: false, default: "" }
+      # 환경별 릴리즈 채널. 지정된 환경은 `release_channel_id` 대신 이 채널로
+      # 간다(환경별 값이 이긴다). 셋 다 비우면 기존처럼 모든 환경의 릴리즈
+      # 노트가 `release_channel_id` 한 곳으로 모인다.
+      release_channel_dev:   { type: string, required: false, default: "" }
+      release_channel_stage: { type: string, required: false, default: "" }
+      release_channel_prod:  { type: string, required: false, default: "" }
       # 릴리즈 노트 형식(+릴리즈 채널)을 쓰는 환경. 쉼표 구분, 공백 허용.
       # 빈 값이면 기본값과 같다. prod 의 v* 태그·GitHub Release 는 이 목록과
       # 무관하게 prod 에서만 만든다.
@@ -113,6 +119,9 @@ jobs:
           STATUS: ${{ inputs.deploy_status }}
           DEV_CH: ${{ inputs.dev_channel_id }}
           REL_CH: ${{ inputs.release_channel_id }}
+          REL_CH_DEV: ${{ inputs.release_channel_dev }}
+          REL_CH_STAGE: ${{ inputs.release_channel_stage }}
+          REL_CH_PROD: ${{ inputs.release_channel_prod }}
           RELEASE_ENVS: ${{ inputs.release_envs }}
           RANGE_JSON: ${{ steps.range.outputs.json }}
         run: |
@@ -170,15 +179,31 @@ jobs:
                 RELEASE=false
               fi ;;
           esac
+          # 환경별 릴리즈 채널 → 공용 릴리즈 채널 → dev 채널 순으로 떨어진다.
+          # 환경별 값이 공용 값을 이긴다: dev·stage·prod 를 각각의 채널로
+          # 가르는 것이 목적이고, 공용 값은 아직 분리하지 않은 환경(또는
+          # 이 입력을 쓰지 않는 기존 호출 측)을 위한 폴백이다.
+          ENV_CH=""
+          case "$ENVIRONMENT" in
+            dev)   ENV_CH="${REL_CH_DEV:-}" ;;
+            stage) ENV_CH="${REL_CH_STAGE:-}" ;;
+            prod)  ENV_CH="${REL_CH_PROD:-}" ;;
+          esac
+          PICK="$REL_CH"
+          if [ -n "$ENV_CH" ]; then PICK="$ENV_CH"; fi
+
           CH="$DEV_CH"
           if [ "$RELEASE" = true ]; then
-            if [ -n "$REL_CH" ]; then
-              CH="$REL_CH"
+            if [ -n "$PICK" ]; then
+              CH="$PICK"
             else
               # 형식은 릴리즈 노트 그대로이고 채널만 dev 로 폴백한다
               # (스펙 §4.3). 알림을 잃는 것보다 낫지만, 조용히 넘기지 않는다 —
               # 설정을 빠뜨린 사람이 로그에서 알아볼 수 있어야 한다.
-              echo "::warning::release_channel_id 가 지정되지 않았습니다 — 릴리즈 노트를 dev 채널로 보냅니다"
+              # 값에 개행이 있으면 가짜 워크플로 커맨드를 로그에 주입할 수
+              # 있다(`Resolve ArgoCD URL` 과 같은 부류). 넣기 전에 지운다.
+              ENV_SAFE="$(printf '%s' "$ENVIRONMENT" | tr -d '\n\r')"
+              echo "::warning::릴리즈 채널이 지정되지 않았습니다 (release_channel_${ENV_SAFE}·release_channel_id 모두 빈 값) — 릴리즈 노트를 dev 채널로 보냅니다"
             fi
           fi
           echo "release=${RELEASE}" >> "$GITHUB_OUTPUT"
