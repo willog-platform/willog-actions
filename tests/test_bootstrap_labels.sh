@@ -62,21 +62,29 @@ assert_json_eq "재실행 시 모든 호출에 --force 포함" \
 # --- 부하검증(load-bearing) 증명: --force 를 지운 스크래치 복사본은 재실행에서 죽는다 ---
 # 위 "재실행해도 6회 호출" 어서션이 실제로 무언가를 검사하는지 직접 증명한다.
 # bootstrap-labels.sh 를 복사해 `--force` 를 지우고, 같은 상태-가진 가짜 gh 로
-# 똑같은 재실행 시나리오를 돌리면 **두 번째 실행에서 6회에 못 미쳐야 한다**
-# (첫 호출에서 이미 있는 라벨과 부딛혀 set -e 로 죽으므로).
-SCRATCH="$(mktemp -d)/bootstrap-labels-noforce.sh"
+# 똑같은 재실행 시나리오를 돌리면 **두 번째 실행은 정확히 1회 호출**이어야 한다:
+# 가짜 gh 는 존재 검사 전에 인자를 무조건 기록하므로 첫 호출은 로그에 남고,
+# 그 호출이 이미 있는 라벨과 부딛혀 exit 1 → set -e 가 스크립트를 죽인다.
+# 스크래치는 `lib.sh` 를 `$(dirname $BASH_SOURCE)/lib.sh` 로 찾으므로 **옆에
+# 복사해 둔다** — 없으면 source 단계에서 죽어 before/after 모두 0이 되고
+# 증명이 무의미해진다(2026-08-28 재리뷰가 잡은 결함).
+SCRATCH_DIR="$(mktemp -d)"
+SCRATCH="$SCRATCH_DIR/bootstrap-labels-noforce.sh"
 sed 's/ --force//g' "$S" > "$SCRATCH"
+cp "$ROOT/scripts/lib.sh" "$SCRATCH_DIR/lib.sh"
 chmod +x "$SCRATCH"
 
 BIN2="$(make_fake_gh)"
 STATE2="$(mktemp -d)"
 LOG3="$(mktemp)"; LOG4="$(mktemp)"
 GH="$BIN2" GH_LOG="$LOG3" STATE_DIR="$STATE2" bash "$SCRATCH" o/r1 o/r2 >/dev/null 2>&1
-GH="$BIN2" GH_LOG="$LOG4" STATE_DIR="$STATE2" bash "$SCRATCH" o/r1 o/r2 >/dev/null 2>&1
+GH="$BIN2" GH_LOG="$LOG4" STATE_DIR="$STATE2" bash "$SCRATCH" o/r1 o/r2 >/dev/null 2>&1 || true
+FIRST_COUNT="$(grep -c 'label create' "$LOG3" | tr -d ' ')"
 NOFORCE_COUNT="$(grep -c 'label create' "$LOG4" | tr -d ' ')"
-printf '  [증명] --force 제거 스크래치의 재실행 label-create 호출 수: %s (6 미만이어야 어서션이 부하검증임을 증명)\n' "$NOFORCE_COUNT"
-if [ "$NOFORCE_COUNT" -lt 6 ]; then
-  _pass "증명: --force 를 지우면 '재실행해도 6회 호출' 이 실제로 깨진다 (부하검증 확인됨)"
-else
-  _fail "증명 실패: --force 를 지웠는데도 6회 호출이 유지됐다 (어서션이 부하검증이 아님)"
-fi
+printf '  [증명] --force 제거 스크래치: 1회차 %s회 → 재실행 %s회 (기대 6 → 1)\n' "$FIRST_COUNT" "$NOFORCE_COUNT"
+# 1회차가 6이 아니면 스크래치 자체가 실행되지 못한 것(lib.sh 부재 등)이라
+# 재실행 값은 아무 의미가 없다 — 그 경우를 통과로 세지 않는다.
+assert_json_eq "증명 전제: --force 제거 스크래치도 1회차는 정상 실행돼 6회 호출한다" \
+  "$(printf '%s' "$FIRST_COUNT" | jq -R 'tonumber')" '6'
+assert_json_eq "증명: --force 를 지우면 재실행이 첫 라벨에서 죽어 1회 호출로 끝난다 (부하검증 확인됨)" \
+  "$(printf '%s' "$NOFORCE_COUNT" | jq -R 'tonumber')" '1'

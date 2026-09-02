@@ -172,7 +172,8 @@ secrets
    `workflow was not found` 가 나오지 않는지 확인한다.
 2. **릴리즈 전용 Slack 채널을 만들고 알림 봇을 초대**한 뒤 채널 ID를 확보해
    `release_channel_id` 에 넣는다. 초대할 앱은 조직에서 기존 배포 알림을
-   보내던 그 Slack 앱(봇)이며, `chat:write` 스코프가 있어야 한다. 봇 초대를
+   보내던 그 Slack 앱(봇) **`Willog Notification`** 이며(`#cicd` 의 발신자,
+   `SLACK_NOTIFICATION_TOKEN` 의 주인), `chat:write` 스코프가 있어야 한다. 봇 초대를
    빠뜨리면 `not_in_channel` 로 **첫 릴리즈 노트부터** 실패한다. 이 단계를
    건너뛰면 릴리즈 노트가 **조용히 dev 채널로** 간다.
 3. `bash scripts/bootstrap-labels.sh willog-platform/<repo>` 로 라벨 생성.
