@@ -16,7 +16,18 @@ assert_json_eq "따옴표 보존" \
 # 간소 형식: start
 st="$(jq -f "$SJ" --arg phase start "$CTX")"
 assert_json_eq "start 색상" "$(printf '%s' "$st" | jq '.attachments[0].color')" '"#1e90ff"'
-assert_json_eq "start 문안" "$(printf '%s' "$st" | jq '.text | test("배포 시작")')" 'true'
+assert_json_eq "start 문안" "$(printf '%s' "$st" | jq '.attachments[0].fallback | test("배포 시작")')" 'true'
+
+# --- 헤드라인은 한 메시지에 한 번만 보인다 ---
+# 최상단 `text` 와 카드 첫 블록이 같은 헤드라인을 담아 "배포 시작" 이 두 줄로
+# 보인다는 제보(2026-09-03 #cicd)의 회귀 방어. 미리보기 문안은 `fallback` 이
+# 담당하므로 그쪽에는 남아 있어야 한다.
+assert_json_eq "간소 형식에 최상단 text 가 없다" \
+  "$(printf '%s' "$st" | jq 'has("text")')" 'false'
+assert_json_eq "간소 형식의 렌더 텍스트에 헤드라인이 한 번만 나온다" \
+  "$(printf '%s' "$st" | jq '[.attachments[0].blocks | .. | objects | select(.type == "mrkdwn") | .text | select(test("배포 시작"))] | length')" '1'
+assert_json_eq "간소 형식의 fallback 은 미리보기 문안을 유지한다" \
+  "$(printf '%s' "$st" | jq '.attachments[0].fallback | test("배포 시작 \\[rule-engine\\] Production")')" 'true'
 
 # 간소 형식: failure
 fl="$(jq '.deploy_status="failure"' "$CTX" | jq -f "$SJ" --arg phase result)"
@@ -29,9 +40,9 @@ cl="$(jq '.deploy_status="cancelled"' "$CTX" | jq -f "$SJ" --arg phase result)"
 assert_json_eq "cancelled 색상은 중립(회색)" \
   "$(printf '%s' "$cl" | jq '.attachments[0].color')" '"#808080"'
 assert_json_eq "cancelled 헤드라인은 배포 취소" \
-  "$(printf '%s' "$cl" | jq '.text | test("배포 취소")')" 'true'
+  "$(printf '%s' "$cl" | jq '.attachments[0].fallback | test("배포 취소")')" 'true'
 assert_json_eq "cancelled 헤드라인에 실패 문구가 없다" \
-  "$(printf '%s' "$cl" | jq '.text | test("배포 실패")')" 'false'
+  "$(printf '%s' "$cl" | jq '.attachments[0].fallback | test("배포 실패")')" 'false'
 assert_json_eq "cancelled 푸터는 취소를 실패와 구분해 알린다" \
   "$(printf '%s' "$cl" | jq '[.. | strings | select(test("취소"))] | length | . > 0')" 'true'
 assert_json_eq "cancelled 푸터에 오류 발생 문구가 없다" \
@@ -43,7 +54,7 @@ for bad in failure '' typo_unknown_status; do
   assert_json_eq "deploy_status='${bad}' 는 여전히 실패(빨강) 분기" \
     "$(printf '%s' "$bd" | jq '.attachments[0].color')" '"#dc3545"'
   assert_json_eq "deploy_status='${bad}' 는 배포 실패 헤드라인" \
-    "$(printf '%s' "$bd" | jq '.text | test("배포 실패")')" 'true'
+    "$(printf '%s' "$bd" | jq '.attachments[0].fallback | test("배포 실패")')" 'true'
 done
 
 # --- esc 정의가 세 렌더러에서 동일한지 검사 ---

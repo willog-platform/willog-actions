@@ -52,6 +52,5 @@
       "fallback": "🚀  배포 시작 [rule-engine] Production"
     }
   ],
-  "channel": "C0RELEASE",
-  "text": "🚀  배포 시작 [rule-engine] Production"
+  "channel": "C0RELEASE"
 }

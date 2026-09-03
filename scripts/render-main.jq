@@ -103,9 +103,10 @@ def truncation_note:
 def mention_prefix:
   if ((.mention // "") == "") then "" else (.mention + " ") end;
 
+# 최상단 `text` 를 두지 않는 이유는 render-simple.jq 의 같은 위치 주석과 동일하다
+# (헤드라인 중복 렌더). 미리보기 문안은 아래 `fallback` 이 담당한다.
 {
     channel: .channel,
-    text: ("🚀 [" + (.service_name | esc) + "] " + (.version.next | esc) + " · " + (.env_label | esc) + " 배포 완료"),
     attachments: [ {
       color: "#36a64f",
       fallback: ("🚀 [" + (.service_name | esc) + "] " + (.version.next | esc) + " · " + (.env_label | esc) + " 배포 완료"),

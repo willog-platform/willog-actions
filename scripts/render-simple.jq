@@ -41,9 +41,12 @@ def footer:
   elif state == "cancelled" then "배포가 취소되었습니다 ⏹️ 오류는 아닙니다"
   else "배포 중 오류가 발생했습니다 🔥 로그를 확인하세요" end;
 
+# 최상단 `text` 는 두지 않는다. Slack 은 최상단 `text` 를 attachment 카드 **위에**
+# 한 줄로 더 출력하므로, 카드 첫 블록의 헤드라인과 합쳐 "🚀 배포 시작" 이 한
+# 메시지에 두 번 보인다 (2026-09-03 #cicd 제보). 푸시·사이드바 미리보기 문안은
+# attachment 의 `fallback` 이 그대로 담당하므로 알림 품질 손실은 없다.
 {
   channel: .channel,
-  text: (headline + " [" + (.service_name | esc) + "] " + (.env_label | esc)),
   attachments: [ {
     color: color,
     fallback: (headline + " [" + (.service_name | esc) + "] " + (.env_label | esc)),

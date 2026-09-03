@@ -14,6 +14,14 @@ assert_json_eq "API 문안은 확인 필요" \
 assert_json_eq "멘션 포함" \
   "$(printf '%s' "$out" | jq '[.attachments[0].blocks[] | .text?.text? // empty | select(test("<!here>"))] | length | . > 0')" 'true'
 
+# --- 헤드라인은 한 메시지에 한 번만 보인다 ---
+# 최상단 `text` 와 카드 첫 블록의 헤드라인 중복 렌더(2026-09-03 #cicd 제보) 회귀 방어.
+assert_json_eq "최상단 text 가 없다" "$(printf '%s' "$out" | jq 'has("text")')" 'false'
+assert_json_eq "렌더 텍스트에 완료 헤드라인이 한 번만 나온다" \
+  "$(printf '%s' "$out" | jq '[.attachments[0].blocks | .. | objects | select(.type == "mrkdwn") | .text | select(test("배포 완료"))] | length')" '1'
+assert_json_eq "fallback 은 미리보기 문안을 유지한다" \
+  "$(printf '%s' "$out" | jq '.attachments[0].fallback | test("배포 완료")')" 'true'
+
 # 인젝션 회귀: 따옴표가 살아남고 페이로드는 유효 JSON
 assert_json_eq "따옴표 보존" \
   "$(printf '%s' "$out" | jq '[.. | strings | select(test("NPE .경계. 수정"))] | length | . > 0')" 'true'
