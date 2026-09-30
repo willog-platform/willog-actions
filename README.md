@@ -166,6 +166,7 @@ git ls-files | grep -E 'Controller|controller'
 | `release_channel_id` | string | | `""` | 환경별 채널을 쓰지 않는 환경의 릴리즈 노트 채널(공용 폴백). **환경별 값과 둘 다 비우면 릴리즈 노트가 dev 채널로 간다** |
 | `release_channel_dev` / `_stage` / `_prod` | string | | `""` | 환경별 릴리즈 노트 채널. 해당 환경에서 `release_channel_id` 를 **이긴다**. 비운 환경만 공용 값으로 떨어진다 |
 | `release_envs` | string | | `stage,prod` | 릴리즈 노트 형식을 쓰는 환경(쉼표 구분). dev 배포도 릴리즈 채널에 보이게 하려면 `dev,stage,prod`. GitHub Release 는 목록과 무관하게 prod 에서만 |
+| `tag_envs` | string | | `""` | `v*` 태그를 만드는 환경(쉼표 구분). 비우면 릴리즈 경로를 타는 모든 환경(= 처음 배포하는 환경이 번호 확정). dev/release/main 브랜치 모델은 `prod` — dev·stage 는 릴리즈 노트만(번호 "미정") |
 | `migration_glob` | string | 릴리즈 경로 필수 | `""` | 위 표 참고. 릴리즈 경로에서 빈 값이면 크게 실패한다. 마이그레이션이 없는 repo(프론트엔드 등)는 `none` 으로 명시 |
 | `api_path_glob` | string | | `""` | 컨트롤러 경로. 미지정 시 API 표면 감지를 건너뛴다 |
 | `api_exclude_glob` | string | | `**/*.spec.ts,**/*Test.kt,**/test/**` | API 감지에서 제외할 경로 |
@@ -194,12 +195,21 @@ secrets
 | 같은 커밋 재배포 | 같은 번호 | 그대로 | 이미 있으면 건너뜀 |
 | dev 를 우회한 핫픽스 배포 | 계산 | 그 환경이 생성 | prod 면 생성 |
 
-태깅 주체는 `release_envs` 의 첫 환경이다 — `dev,stage,prod` 면 dev 가, 기본값
-`stage,prod` 면 stage 가 태그를 만든다(릴리즈 경로를 타지 않는 환경은 버전을
-계산하지도, 공지하지도 않는다).
+태깅 주체는 `tag_envs` 가 정한다. **비우면** `release_envs` 의 첫 환경이다 —
+`dev,stage,prod` 면 dev 가, 기본값 `stage,prod` 면 stage 가 태그를 만든다(릴리즈
+경로를 타지 않는 환경은 버전을 계산하지도, 공지하지도 않는다). 결과적으로
+`#deploy_summary_dev` → `_stage` → `_prod` 가 **같은 번호**로 승격을 추적한다.
+dev 까지만 가고 끝난 번호는 prod 에서 건너뛴 번호로 남는다 — 정상이다.
 
-결과적으로 `#deploy_summary_dev` → `_stage` → `_prod` 가 **같은 번호**로 승격을
-추적한다. dev 까지만 가고 끝난 번호는 prod 에서 건너뛴 번호로 남는다 — 정상이다.
+**dev/release/main 브랜치 모델(vision-web·vision-api·rule-engine·telemetry-api·
+insurance-api)은 `release_envs: dev,stage,prod` + `tag_envs: prod`** 로 둔다.
+번호는 main 배포(= prod)에서 릴리즈 PR 라벨로만 확정되고, dev·stage 릴리즈
+노트는 번호 자리에 "미정 · prod 에서 확정 (직전 vX.Y.Z)" 를 싣는다 — 그
+환경의 커밋 범위에 든 PR 라벨로 예측한 번호는 릴리즈 PR 라벨과 다를 수 있어
+(기능 PR 은 라벨이 없어 patch, 릴리즈 PR 은 `feature` → minor) 내보내지 않는다.
+이미 태깅된 커밋(롤백·재배포)은 어느 환경이든 그 번호를 그대로 쓴다.
+`tag_envs` 를 두지 않고 `release_envs: prod` 로만 좁히면 dev·stage 채널의
+릴리즈 노트가 함께 꺼진다(2026-09-22~29 전환기의 상태).
 
 bump 판정(`auto`)은 `deployed/{env}..HEAD` 구간 PR 라벨에서 나온다:
 `breaking` → major, `feature` → minor, 그 외 → patch. 계산이 일어나는 시점은

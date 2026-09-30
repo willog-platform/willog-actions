@@ -32,11 +32,25 @@ def fold($items; $n; $sep):
   else (($items[:$n] | join($sep)) + $sep + "그 외 " + (($items | length) - $n | tostring) + "건")
   end;
 
+# `next == null` 은 번호 미정(`bump: pending`) — 이 환경이 태깅 주체가 아니라
+# (`tag_envs` 밖) 번호를 확정하지 않은 릴리즈 노트다. 틀릴 수 있는 예측 번호
+# 대신 직전 릴리즈만 적고, 헤드라인·fallback 에서는 번호 자리를 비운다.
+def version_pending: (.version.next == null);
+
 def version_text:
-  if .version.previous == null
+  if version_pending
+  then "미정 · prod 에서 확정" +
+       (if .version.previous == null then "" else " (직전 " + (.version.previous | esc) + ")" end)
+  elif .version.previous == null
   then "`" + (.version.next | esc) + "`"
   else (.version.previous | esc) + " → `" + (.version.next | esc) + "`"
   end;
+
+# 헤드라인의 번호 조각. 미정이면 비운다 — "`null`" 이 나가면 안 된다.
+def version_headline:
+  if version_pending then "" else "`" + (.version.next | esc) + "`  ·  " end;
+def version_fallback:
+  if version_pending then "" else (.version.next | esc) + " · " end;
 
 # 상단 요약: 상위 5건까지, 초과분은 접는다.
 def summary_lines:
@@ -88,7 +102,8 @@ def links_field:
   # `https:///...` 는 끊긴 링크다 — 둘 다 이유 없이 노출되면 안 된다.
   (if ((.argocd_url // "") == "") then " · ArgoCD(링크 없음)"
    else " · <" + .argocd_url + "|ArgoCD>" end) +
-  (if .environment == "prod"
+  # Release 링크는 prod 이면서 번호가 확정됐을 때만 — 미정이면 만들 태그가 없다.
+  (if .environment == "prod" and (version_pending | not)
    then " · <" + repo_url + "/releases/tag/" + .version.next + "|Release>"
    else "" end);
 
@@ -109,12 +124,12 @@ def mention_prefix:
     channel: .channel,
     attachments: [ {
       color: "#36a64f",
-      fallback: ("🚀 [" + (.service_name | esc) + "] " + (.version.next | esc) + " · " + (.env_label | esc) + " 배포 완료"),
+      fallback: ("🚀 [" + (.service_name | esc) + "] " + version_fallback + (.env_label | esc) + " 배포 완료"),
       blocks: (
         [ { type: "section", text: md(
               mention_prefix +
               "🚀  *[ <" + repo_url + "|" + (.service_name | esc) + "> ]  " +
-              "`" + (.version.next | esc) + "`  ·  " + (.env_label | esc) + " 배포 완료*") },
+              version_headline + (.env_label | esc) + " 배포 완료*") },
           { type: "divider" },
           { type: "section", text: md(("*이번 배포 내용*\n" + summary_lines + truncation_note) | clip(2800)) } ]
         + ( (warning_line) as $w

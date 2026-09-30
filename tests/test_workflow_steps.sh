@@ -633,11 +633,40 @@ case "$tag_if" in
   *"thread_ts != ''"*) _pass "전송 확인 전에는 번호를 소비하지 않는다" ;;
   *) _fail "태그 스텝에 전송 확인 게이트가 없다: ${tag_if}" ;;
 esac
-# 태그 스텝에 환경 조건이 남아 있으면 dev 가 태깅 주체가 되지 못하고
-# v1.0.0 고정 증상이 그대로 재발한다.
+# 태그 스텝에 환경 리터럴이 박혀 있으면 dev 가 태깅 주체가 되지 못하고
+# v1.0.0 고정 증상이 그대로 재발한다. 환경 제한은 호출 측이 `tag_envs` 로
+# 고르고, 그 판정(`Choose tag env`)만 게이트로 쓴다.
 case "$tag_if" in
   *"environment == 'prod'"*) _fail "태그 스텝이 prod 로 제한되어 있다 (버전이 환경 속성이 된다)" ;;
-  *) _pass "태그 스텝은 환경에 제한되지 않는다" ;;
+  *) _pass "태그 스텝은 환경 리터럴에 제한되지 않는다" ;;
+esac
+case "$tag_if" in
+  *"tagger.outputs.tag == 'true'"*) _pass "태그 스텝은 tag_envs 판정을 게이트로 쓴다" ;;
+  *) _fail "태그 스텝에 tag_envs 게이트가 없다: ${tag_if}" ;;
+esac
+
+# --- Choose tag env : v* 태그 주체를 호출 측이 고른다 (tag_envs) ---
+# 비우면 릴리즈 경로 전부(기존 동작). 릴리즈 브랜치 모델은 `prod` 로 두어
+# dev·stage 가 릴리즈 노트는 보내되 태그는 만들지 않게 한다.
+tg() {
+  RELEASE="$1" ENVIRONMENT="$2" TAG_ENVS="$3" run_step "Choose tag env" 2>/dev/null | tr -d '\n' | jq -Rc .
+}
+assert_json_eq "tag_envs 빈 값 + 릴리즈 → 태깅 (기존 동작)"       "$(tg true dev '')"          '"tag=true"'
+assert_json_eq "tag_envs 구분자만 → 빈 값과 같다"               "$(tg true stage ' , ')"     '"tag=true"'
+assert_json_eq "tag_envs=prod → stage 는 태깅하지 않는다"        "$(tg true stage prod)"      '"tag=false"'
+assert_json_eq "tag_envs=prod → dev 도 태깅하지 않는다"          "$(tg true dev prod)"        '"tag=false"'
+assert_json_eq "tag_envs=prod → prod 는 태깅한다"                "$(tg true prod prod)"       '"tag=true"'
+assert_json_eq "tag_envs 공백 포함 'stage, prod' 도 허용"        "$(tg true stage 'stage, prod')" '"tag=true"'
+assert_json_eq "부분 문자열 'production' 은 prod 와 다르다"      "$(tg true prod production)" '"tag=false"'
+assert_json_eq "릴리즈 경로가 아니면 tag_envs 에 있어도 태깅 없음" "$(tg false prod prod)"      '"tag=false"'
+assert_json_eq "RELEASE 빈 값(알 수 없음)도 태깅 없음"           "$(tg '' prod '')"           '"tag=false"'
+
+# Release 스텝은 번호가 확정된 배포에서만 돈다 — pending 이면 만들 태그가 없다.
+rel_if="$(awk '/- name: Create GitHub release \(prod only\)$/{f=1} f&&/^ +if:/{print;exit}' \
+          "$ROOT/.github/workflows/deploy-notify.yml")"
+case "$rel_if" in
+  *"release_ctx.outputs.version != ''"*) _pass "번호 미정이면 Release 를 만들지 않는다" ;;
+  *) _fail "Release 스텝에 버전 확정 게이트가 없다: ${rel_if}" ;;
 esac
 
 # --- Create GitHub release (prod only) : 중복 판정 기준은 Release, 태그가 아니다 ---
