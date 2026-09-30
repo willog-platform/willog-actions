@@ -143,5 +143,28 @@ assert_json_eq "빈 image_tag 에서 빈 코드스팬이 남지 않는다" \
   "$(printf '%s' "$noimg" | jq '[.. | strings | select(test("``"))] | length')" '0'
 
 # 골든 회귀
+# --- 번호 미정(pending) : 태깅 주체가 아닌 환경의 릴리즈 노트 ---
+# `tag_envs: prod` 인 호출 측의 dev·stage 배포. next 가 null 이면 예측 번호를
+# 내보내지 않고, 헤드라인·fallback 에 `null` 이 새지 않으며, Release 링크도 없다.
+pend="$(jq '.environment = "stage" | .env_label = "Staging" | .mention = ""
+           | .version = {previous:"v1.7.0", next:null, bump:"pending"}' \
+        "$ROOT/tests/fixtures/context_prod.json" | jq -f "$J")"
+assert_json_eq "미정이면 버전 필드에 미정 + 직전 릴리즈" \
+  "$(printf '%s' "$pend" | jq -c '[.attachments[0].blocks[] | .fields? // [] | .[] | .text | select(test("버전"))] | .[0]')" \
+  '"*📦  버전*\n미정 · prod 에서 확정 (직전 v1.7.0)"'
+assert_json_eq "미정이면 어디에도 null 문자열이 새지 않는다" \
+  "$(printf '%s' "$pend" | jq '[.. | strings | select(test("null"))] | length')" '0'
+assert_json_eq "미정 헤드라인은 번호 자리를 비운다" \
+  "$(printf '%s' "$pend" | jq '[.attachments[0].blocks[] | .text?.text? // empty | select(test("\\]  Staging 배포 완료"))] | length')" '1'
+assert_json_eq "미정 fallback 도 번호 없이 유효하다" \
+  "$(printf '%s' "$pend" | jq '.attachments[0].fallback')" '"🚀 [rule-engine] Staging 배포 완료"'
+assert_json_eq "미정이면 Release 링크가 없다 (prod 라도)" \
+  "$(jq '.version = {previous:"v1.7.0", next:null, bump:"pending"}' "$ROOT/tests/fixtures/context_prod.json" \
+     | jq -f "$J" | jq '[.. | strings | select(test("releases/tag"))] | length')" '0'
+pend0="$(jq '.version = {previous:null, next:null, bump:"pending"}' "$ROOT/tests/fixtures/context_minimal.json" | jq -f "$J")"
+assert_json_eq "직전 릴리즈가 없는 미정도 유효" \
+  "$(printf '%s' "$pend0" | jq -c '[.attachments[0].blocks[] | .fields? // [] | .[] | .text | select(test("버전"))] | .[0]')" \
+  '"*📦  버전*\n미정 · prod 에서 확정"'
+
 assert_json_eq "prod 골든" "$out" "$(cat "$ROOT/tests/golden/payload_prod.json")"
 assert_json_eq "minimal 골든" "$min" "$(cat "$ROOT/tests/golden/payload_minimal.json")"

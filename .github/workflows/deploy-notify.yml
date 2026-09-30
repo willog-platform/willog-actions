@@ -25,9 +25,15 @@ on:
       release_channel_stage: { type: string, required: false, default: "" }
       release_channel_prod:  { type: string, required: false, default: "" }
       # 릴리즈 노트 형식(+릴리즈 채널)을 쓰는 환경. 쉼표 구분, 공백 허용.
-      # 빈 값이면 기본값과 같다. prod 의 v* 태그·GitHub Release 는 이 목록과
-      # 무관하게 prod 에서만 만든다.
+      # 빈 값이면 기본값과 같다. GitHub Release 는 이 목록과 무관하게 prod 에서만
+      # 만든다. v* 태그는 아래 `tag_envs` 가 정한다.
       release_envs:      { type: string, required: false, default: "stage,prod" }
+      # v* 태그를 만드는 환경. 쉼표 구분, 공백 허용. 빈 값이면 릴리즈 경로를 타는
+      # 모든 환경이 태깅 주체다(= 처음 배포하는 환경이 번호를 확정하는 기존 동작).
+      # dev/release/main 브랜치 모델에서는 `prod` 로 두어 dev·stage 는 릴리즈
+      # 노트만 보내고(번호 "미정") 번호는 main 배포에서만 확정한다 — 그러지 않으면
+      # QA 수정 push 마다 태그가 생겨 라벨→bump 규칙이 무의미해진다.
+      tag_envs:          { type: string, required: false, default: "" }
       max_commits:       { type: string, required: false, default: "100" }
     secrets:
       SLACK_NOTIFICATION_TOKEN: { required: true }
@@ -209,6 +215,31 @@ jobs:
           echo "release=${RELEASE}" >> "$GITHUB_OUTPUT"
           echo "id=${CH}"          >> "$GITHUB_OUTPUT"
 
+      # 태깅 주체 판정. `Choose channel` 과 분리한 이유: 그 스텝의 출력
+      # (`release`·`id`)은 호출 측·테스트가 진리표로 못 박아 둔 계약이다.
+      - name: Choose tag env
+        id: tagger
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE: ${{ steps.channel.outputs.release }}
+          TAG_ENVS: ${{ inputs.tag_envs }}
+        run: |
+          set -euo pipefail
+          # 릴리즈 경로가 아니면 태그도 없다. `tag_envs` 가 비면(구분자만 있어도)
+          # 릴리즈 경로 전부가 태깅 주체다 — 이 입력을 모르는 기존 호출 측을
+          # 깨지 않기 위한 기본값이다. 정확히 일치하는 토큰만 인정한다.
+          TAG=false
+          if [ "$RELEASE" = true ]; then
+            if [ -z "$(printf '%s' "${TAG_ENVS:-}" | tr -d ' ,')" ]; then
+              TAG=true
+            else
+              for tok in $(printf '%s' "$TAG_ENVS" | tr ',' ' '); do
+                if [ "$tok" = "$ENVIRONMENT" ]; then TAG=true; fi
+              done
+            fi
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Build simple context
         id: simple_ctx
         if: ${{ steps.channel.outputs.release != 'true' }}
@@ -302,6 +333,7 @@ jobs:
           ARGOCD_URL: ${{ steps.argo.outputs.url }}
           CHANNEL: ${{ steps.channel.outputs.id }}
           RANGE_JSON: ${{ steps.range.outputs.json }}
+          TAG: ${{ steps.tagger.outputs.tag }}
         run: |
           set -euo pipefail
           S=.willog-actions/scripts
@@ -327,6 +359,20 @@ jobs:
 
           LABELS="$(printf '%s' "$PRS" | jq -c '[.[].labels[]] | unique')"
           VERSION="$(bash "$S/next-version.sh" "$LABELS" "$VERSION_BUMP")"
+
+          # 태깅 주체가 아닌 환경은 번호를 확정하지 않는다. next-version.sh 의
+          # "다음 번호"는 **이 환경의 커밋 범위에 든 PR 라벨**로 예측한 값인데,
+          # 릴리즈 브랜치 모델에서는 번호를 정하는 라벨이 prod 의 릴리즈 PR 에
+          # 있으므로 dev·stage 의 예측은 틀릴 수 있다(기능 PR 은 라벨이 없어
+          # patch 로 보이지만 릴리즈 PR 은 feature → minor). 틀릴 수 있는 번호를
+          # 공지하느니 "미정" 으로 보내고 직전 릴리즈만 적는다.
+          # 이미 태깅된 커밋(`bump: existing` — 롤백·재배포)은 번호가 확정된
+          # 것이므로 그대로 쓴다.
+          if [ "${TAG:-}" != true ] \
+             && [ "$(printf '%s' "$VERSION" | jq -r '.bump')" != existing ]; then
+            VERSION="$(printf '%s' "$VERSION" \
+                       | jq -c '{previous: .previous, next: null, bump: "pending"}')"
+          fi
 
           case "$ENVIRONMENT" in
             stage) LABEL=Staging ;; prod) LABEL=Production ;; *) LABEL="$ENVIRONMENT" ;;
@@ -359,7 +405,8 @@ jobs:
               mention:$mention, range:$range, version:$version, prs:$prs, changes:$changes}')"
 
           printf 'json=%s\n' "$CTX" >> "$GITHUB_OUTPUT"
-          printf 'version=%s\n' "$(printf '%s' "$VERSION" | jq -r '.next')" >> "$GITHUB_OUTPUT"
+          # 미정(pending)이면 빈 값. 태그·Release 스텝은 빈 버전으로는 돌지 않는다.
+          printf 'version=%s\n' "$(printf '%s' "$VERSION" | jq -r '.next // empty')" >> "$GITHUB_OUTPUT"
           # 태그 스텝의 게이트. `existing` 이면 이 커밋에 이미 태그가 있다.
           printf 'version_bump=%s\n' "$(printf '%s' "$VERSION" | jq -r '.bump')" >> "$GITHUB_OUTPUT"
 
@@ -402,18 +449,20 @@ jobs:
           printf '%s' "$RESP2" | jq -e '.ok' >/dev/null \
             || printf '::warning::스레드 답글 전송 실패: %s\n' "$(printf '%s' "$RESP2" | jq -r '.error // "unknown"')"
 
-      # 버전 태그는 **환경과 무관하게** 배포된 커밋에 붙는다. 버전은 커밋
-      # (아티팩트)의 속성이고 환경은 그 아티팩트가 어디까지 승격됐는지일 뿐이다.
+      # 버전 태그는 배포된 커밋에 붙는다. 버전은 커밋(아티팩트)의 속성이고
+      # 환경은 그 아티팩트가 어디까지 승격됐는지일 뿐이다. 어느 환경이 태깅
+      # 주체인지는 `tag_envs`(→ `Choose tag env`)가 정한다 — 비우면 릴리즈
+      # 경로를 처음 타는 환경(보통 dev), 릴리즈 브랜치 모델이면 prod 만.
       # `bump: existing` 은 next-version.sh 가 "이 커밋엔 이미 태그가 있다"고
-      # 판정한 경우이므로 이 스텝을 건너뛴다 — 첫 배포 환경(보통 dev)이 태깅
-      # 주체가 되고 뒤따르는 stage·prod 는 같은 번호를 역조회해 공지한다.
+      # 판정한 경우이므로 이 스텝을 건너뛴다 — 뒤따르는 환경은 같은 번호를
+      # 역조회해 공지한다.
       #
       # 전송 확인(`thread_ts`) 뒤에 두는 것이 중요하다. 번호는 노트 본문에
       # 들어가므로 전송 **전에** 확정돼야 하지만, 태그를 **전송 전에** 만들면
       # 전송이 실패한 배포가 번호를 소비해 아무도 못 본 버전이 생긴다.
       # 전송 실패 시에는 태그가 없으니 다음 배포가 같은 번호를 다시 계산한다.
       - name: Create version tag
-        if: ${{ steps.channel.outputs.release == 'true' && steps.send.outputs.thread_ts != '' && steps.release_ctx.outputs.version_bump != 'existing' }}
+        if: ${{ steps.channel.outputs.release == 'true' && steps.tagger.outputs.tag == 'true' && steps.send.outputs.thread_ts != '' && steps.release_ctx.outputs.version_bump != 'existing' }}
         env:
           VERSION: ${{ steps.release_ctx.outputs.version }}
         run: |
@@ -447,8 +496,10 @@ jobs:
       # GitHub Release 는 prod 에서만 만든다. **중복 판정 기준이 태그가 아니라
       # Release 다** — 태그는 이제 dev 배포 시점에 이미 존재하는 것이 정상이므로,
       # 태그 유무로 건너뛰면 prod Release 가 영구히 만들어지지 않는다.
+      # `version != ''` — 번호가 미정(pending)인 prod 배포(= prod 가 `tag_envs`
+      # 밖인 잘못된 설정)에서는 만들 태그도 없으므로 건너뛴다.
       - name: Create GitHub release (prod only)
-        if: ${{ steps.channel.outputs.release == 'true' && inputs.environment == 'prod' && steps.send.outputs.thread_ts != '' }}
+        if: ${{ steps.channel.outputs.release == 'true' && inputs.environment == 'prod' && steps.send.outputs.thread_ts != '' && steps.release_ctx.outputs.version != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release_ctx.outputs.version }}
